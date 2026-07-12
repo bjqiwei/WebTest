@@ -52,6 +52,11 @@ def _path_name_from_url(url: str) -> str:
     return path
 
 
+def _build_output_base_name(url: str, page_index: int, timestamp: str) -> str:
+    page_name = _path_name_from_url(url)
+    return f"{page_index:04d}_{page_name}_html_{timestamp}"
+
+
 def _resolve_url(base: str, link: str) -> str:
     if not link:
         return ''
@@ -273,8 +278,6 @@ def _extract_links(html: str, base_url: str, root_host: str):
     soup = BeautifulSoup(html, 'html.parser')
     links = []
     for a in soup.find_all('a', href=True):
-        if _is_in_noise_area(a):
-            continue
         href = a.get('href', '').strip()
         if not href or href.startswith('#'):
             continue
@@ -404,15 +407,20 @@ def fetch_html(
     return html
 
 
-def _save_page_output(url: str, html: str, outdir: Path, page_index: int, timestamp: str):
-    page_name = _path_name_from_url(url)
-    base_name = f"{page_index:04d}_{page_name}_html_{timestamp}"
+def _save_html_snapshot(url: str, html: str, outdir: Path, page_index: int, timestamp: str) -> str:
+    base_name = _build_output_base_name(url, page_index, timestamp)
     html_path = outdir / f"{base_name}.html"
-    json_path = outdir / f"{base_name}.json"
 
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html)
 
+    return str(html_path)
+
+
+def _save_page_output(url: str, html: str, outdir: Path, page_index: int, timestamp: str):
+    base_name = _build_output_base_name(url, page_index, timestamp)
+    html_path = outdir / f"{base_name}.html"
+    json_path = outdir / f"{base_name}.json"
     content_blocks = extract_content_blocks(html, url)
     payload = {
         'original_link': url,
@@ -434,7 +442,23 @@ def _save_page_output(url: str, html: str, outdir: Path, page_index: int, timest
     }
 
 
-def scrape_site(
+def _write_html_manifest(start_url: str, outdir: Path, timestamp: str, pages: list, failed: list, failed_reasons: dict):
+    manifest_path = outdir / f"{_safe_name_from_url(start_url)}_html_manifest_{timestamp}.json"
+    payload = {
+        'start_url': start_url,
+        'saved_count': len(pages),
+        'failed_count': len(failed),
+        'failed': failed,
+        'failed_reasons': failed_reasons,
+        'pages': pages,
+    }
+    with open(manifest_path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    payload['summary_path'] = str(manifest_path)
+    return payload
+
+
+def save_site_html(
     url: str,
     outdir: Path,
     max_depth: int = 0,
@@ -442,7 +466,7 @@ def scrape_site(
     renderer: str = 'auto',
     playwright_headless: bool = True,
     playwright_wait_seconds: float = 5.0,
-    progress_callback=None,
+    phase_callback=None,
 ):
     start_url = _normalize_url(url)
     if not start_url:
@@ -452,27 +476,24 @@ def scrape_site(
     root_host = urlparse(start_url).netloc
     visited = set()
     queue = deque([(start_url, 0)])
-    pages = []
+    discovered_pages = []
     failed = []
     failed_reasons = {}
-    total_videos = 0
-    total_media = 0
-    discovered_urls = []
-    html_cache = {}
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     unlimited_depth = max_depth < 0
     unlimited_pages = max_pages <= 0
 
-    # Phase 1: recursively discover and fetch all HTML pages to establish a stable total.
-    while queue and (unlimited_pages or len(discovered_urls) < max_pages):
+    if callable(phase_callback):
+        phase_callback('saving_html')
+
+    while queue and (unlimited_pages or len(discovered_pages) < max_pages):
         current_url, depth = queue.popleft()
         if current_url in visited:
             continue
-        # 文件扩展名是.html或.htm的页面，或者路径没有扩展名的页面。
         if not re.search(r'\.html?$', urlparse(current_url).path, re.IGNORECASE) and '.' in Path(urlparse(current_url).path).suffix:
             continue
         visited.add(current_url)
-        print(f'Fetching {current_url} at depth {depth}')
+
         try:
             html = fetch_html(
                 current_url,
@@ -488,8 +509,20 @@ def scrape_site(
             _mark_failed(current_url, 'non_html_document', failed, failed_reasons)
             continue
 
-        discovered_urls.append(current_url)
-        html_cache[current_url] = html
+        page_index = len(discovered_pages) + 1
+        try:
+            html_path = _save_html_snapshot(
+                current_url,
+                html,
+                outdir,
+                page_index=page_index,
+                timestamp=timestamp,
+            )
+        except Exception:
+            _mark_failed(current_url, 'html_save_error', failed, failed_reasons)
+            continue
+
+        discovered_pages.append({'url': current_url, 'html_path': html_path})
 
         if not unlimited_depth and depth >= max_depth:
             continue
@@ -504,20 +537,44 @@ def scrape_site(
             if link not in visited:
                 queue.append((link, depth + 1))
 
-    # Phase 2: parse and save with fixed total HTML count.
-    total_known_html = len(discovered_urls)
-    for idx, current_url in enumerate(discovered_urls, start=1):
+    return _write_html_manifest(start_url, outdir, timestamp, discovered_pages, failed, failed_reasons)
+
+
+def analyze_saved_html(manifest_path: Path, progress_callback=None, phase_callback=None):
+    manifest_path = Path(manifest_path)
+    with open(manifest_path, 'r', encoding='utf-8') as f:
+        manifest = json.load(f)
+
+    pages = []
+    failed = []
+    failed_reasons = {}
+    total_videos = 0
+    total_media = 0
+    manifest_pages = manifest.get('pages', [])
+    total_known_html = len(manifest_pages)
+
+    if callable(phase_callback):
+        phase_callback('analyzing_html')
+
+    for idx, page in enumerate(manifest_pages, start=1):
+        current_url = page['url']
         if callable(progress_callback):
             progress_callback(idx, total_known_html, current_url)
 
-        html = html_cache[current_url]
+        html_path = Path(page['html_path'])
+        try:
+            html = html_path.read_text(encoding='utf-8')
+        except Exception:
+            _mark_failed(current_url, 'html_read_error', failed, failed_reasons)
+            continue
+
         try:
             page_data = _save_page_output(
                 current_url,
                 html,
-                outdir,
-                page_index=len(pages) + 1,
-                timestamp=timestamp,
+                html_path.parent,
+                idx,
+                html_path.stem.rsplit('_html_', 1)[-1],
             )
         except Exception:
             _mark_failed(current_url, 'parse_or_save_error', failed, failed_reasons)
@@ -536,7 +593,8 @@ def scrape_site(
         )
 
     summary = {
-        'start_url': start_url,
+        'start_url': manifest['start_url'],
+        'manifest_path': str(manifest_path),
         'page_count': len(pages),
         'video_count': total_videos,
         'media_count': total_media,
@@ -545,11 +603,44 @@ def scrape_site(
         'failed_reasons': failed_reasons,
         'pages': pages,
     }
-    summary_path = outdir / f"{_safe_name_from_url(start_url)}_summary.json"
+    summary_path = manifest_path.parent / f"{_safe_name_from_url(manifest['start_url'])}_summary.json"
     with open(summary_path, 'w', encoding='utf-8') as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
-
     summary['summary_path'] = str(summary_path)
+    return summary
+
+
+def scrape_site(
+    url: str,
+    outdir: Path,
+    max_depth: int = 0,
+    max_pages: int = 20,
+    renderer: str = 'auto',
+    playwright_headless: bool = True,
+    playwright_wait_seconds: float = 5.0,
+    progress_callback=None,
+    phase_callback=None,
+):
+    save_result = save_site_html(
+        url,
+        outdir,
+        max_depth=max_depth,
+        max_pages=max_pages,
+        renderer=renderer,
+        playwright_headless=playwright_headless,
+        playwright_wait_seconds=playwright_wait_seconds,
+        phase_callback=phase_callback,
+    )
+    summary = analyze_saved_html(
+        save_result['summary_path'],
+        progress_callback=progress_callback,
+        phase_callback=phase_callback,
+    )
+    for failed_url in save_result.get('failed', []):
+        if failed_url not in summary['failed_reasons']:
+            summary['failed'].append(failed_url)
+            summary['failed_reasons'][failed_url] = save_result['failed_reasons'][failed_url]
+    summary['failed_count'] = len(summary['failed'])
     return summary
 
 

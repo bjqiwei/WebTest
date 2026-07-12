@@ -19,6 +19,13 @@ python -m playwright install chromium
 python scrape.py https://example.com -o output
 ```
 
+也可以拆成两步：
+
+```bash
+python scrape.py save https://example.com -o output
+python scrape.py analyze output/<manifest>.json
+```
+
 3. 多页面递归抓取示例：
 
 ```bash

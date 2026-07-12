@@ -163,6 +163,27 @@ def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
     assert summary['media_count'] == 2
 
 
+def test_scrape_site_follows_header_nav_links(tmp_path, monkeypatch):
+    pages = {
+        'https://example.com/': '''
+        <html><body>
+          <header>
+            <nav><a href="/about">About</a></nav>
+          </header>
+          <main><p>Home</p></main>
+        </body></html>
+        ''',
+        'https://example.com/about': '<html><body><main><p>About us</p></main></body></html>',
+    }
+
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: pages[url])
+
+    result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
+    assert result['page_count'] == 2
+    assert result['failed_count'] == 0
+    assert [p['url'] for p in result['pages']] == ['https://example.com/', 'https://example.com/about']
+
+
 def test_scrape_site_unlimited_depth_and_pages(tmp_path, monkeypatch):
     pages = {
     'https://example.com/': '<html><body><a href="/a.html">a</a></body></html>',
