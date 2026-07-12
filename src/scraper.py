@@ -30,11 +30,6 @@ NOISE_KEYWORDS = ('nav', 'footer', 'cookie', 'consent', 'breadcrumb', 'share', '
 VIDEO_FILE_RE = re.compile(r'\.(mp4|m3u8|webm|ogg)(\?|$)', re.I)
 EMBED_RE = re.compile(r'youtube|youtu\.be|vimeo|player|wistia', re.I)
 IMAGE_FILE_RE = re.compile(r'\.(png|jpe?g|webp|gif|bmp|svg)(\?|$)', re.I)
-PDF_FILE_RE = re.compile(r'\.pdf(\?|$)', re.I)
-NON_HTML_FILE_RE = re.compile(
-    r'\.(pdf|zip|rar|7z|tar|gz|docx?|xlsx?|pptx?|csv|xml|json|txt|css|js|map|ico|woff2?|ttf|eot|otf|mp3|wav|ogg|mp4|m3u8|webm|avi|mov)(\?|$)',
-    re.I,
-)
 HTML_CONTENT_TYPE_RE = re.compile(r'text/html|application/xhtml\+xml', re.I)
 
 
@@ -285,14 +280,11 @@ def _extract_links(html: str, base_url: str, root_host: str):
             continue
         if href.startswith(('mailto:', 'tel:', 'javascript:')):
             continue
+        #文件无扩展名或者扩展名是.html或.htm的链接
+        if not re.search(r'\.html?$', urlparse(href).path, re.IGNORECASE) and '.' in Path(urlparse(href).path).suffix:
+            continue
         resolved = _normalize_url(_resolve_url(base_url, href))
         if not resolved:
-            continue
-        if PDF_FILE_RE.search(resolved):
-            continue
-        # Keep likely HTML pages: .html/.htm, trailing slash, or extensionless paths.
-        # Skip obvious non-HTML file resources.
-        if NON_HTML_FILE_RE.search(resolved):
             continue
         if not _is_same_domain(resolved, root_host):
             continue
@@ -458,7 +450,6 @@ def scrape_site(
 
     outdir.mkdir(parents=True, exist_ok=True)
     root_host = urlparse(start_url).netloc
-
     visited = set()
     queue = deque([(start_url, 0)])
     pages = []
@@ -477,8 +468,11 @@ def scrape_site(
         current_url, depth = queue.popleft()
         if current_url in visited:
             continue
+        # 文件扩展名是.html或.htm的页面，或者路径没有扩展名的页面。
+        if not re.search(r'\.html?$', urlparse(current_url).path, re.IGNORECASE) and '.' in Path(urlparse(current_url).path).suffix:
+            continue
         visited.add(current_url)
-
+        print(f'Fetching {current_url} at depth {depth}')
         try:
             html = fetch_html(
                 current_url,
