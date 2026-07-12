@@ -1,0 +1,458 @@
+{
+  "original_link": "https://www.bosch.com/careers",
+  "content_blocks": [
+    "Work LikeABosch",
+    "Learn more about Bosch as an employer and how you can define your career with us.",
+    "Find jobs worldwide",
+    "Why Bosch",
+    "Benefits",
+    "Fields of work",
+    "Career opportunities",
+    "Our colleagues",
+    "Our impact",
+    "Awards",
+    "At Bosch, we care; for you, our business, and our environment",
+    {
+      "id": "0227134bcfacbabcd5118e512e8611ba",
+      "type": "image",
+      "index": 1,
+      "tos_url": "https://assets.bosch.com/media/global/career/wlab/careers-overview_res_1600x900.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/wlab/careers-overview_res_1600x900.webp",
+      "note": "",
+      "alt": "Six people can be seen on a red carpet in a lab. They cheer, laugh and strike various poses."
+    },
+    "Our promise to our associates is rock-solid: we grow together, we enjoy our work, and we inspire each other. Join in and feel the difference.",
+    "Learn more about Bosch as employer",
+    {
+      "id": "1b0e77ab22a3107222727ae76042123a",
+      "type": "image",
+      "index": 2,
+      "tos_url": "https://assets.bosch.com/media/global/career/wlab/enjoy_res_1984x1116.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/wlab/enjoy_res_1984x1116.webp",
+      "note": "",
+      "alt": "A group of associates are lifting another associate who is celebrated and enjoying it."
+    },
+    "Our benefits",
+    "Our people are what make us remarkable. This is why we recognize our associates’ contribution with attractive benefits.",
+    "Learn more about our benefits",
+    "Our fields of work",
+    "Discover a variety of job opportunities — find your place in one of our many focus areas, business sectors and worldwide locations.",
+    "Learn more about our fields of work",
+    {
+      "id": "86bf20bd636ab538deaff905f29da86e",
+      "type": "image",
+      "index": 3,
+      "tos_url": "https://assets.bosch.com/media/global/career/wlab/inspire_res_1984x1116.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/wlab/inspire_res_1984x1116.webp",
+      "note": "",
+      "alt": "A diverse team of associates is posing together in a meeting room full of post-its having fun."
+    },
+    "Career opportunities",
+    "Wherever you want to go — at Bosch, you'll find many opportunities for your professional journey.",
+    {
+      "id": "70508896b08427a73158322ec747f8e7",
+      "type": "image",
+      "index": 4,
+      "tos_url": "https://assets.bosch.com/media/global/career/start_your_career/apprenticeship_res_800x450.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/start_your_career/apprenticeship_res_800x450.webp",
+      "note": "",
+      "alt": "A pupil sits at a desk learning and spins a book on his finger."
+    },
+    "Pupils",
+    "Learn more",
+    {
+      "id": "24fe7673c564545500eeea67ef44d54e",
+      "type": "image",
+      "index": 5,
+      "tos_url": "https://assets.bosch.com/media/global/career/start_your_career/apprenticeship-marketing-it-team_res_800x450.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/start_your_career/apprenticeship-marketing-it-team_res_800x450.webp",
+      "note": "",
+      "alt": "A team of students is sitting on the floor laughing. One student has a laptop on her lap, another shows a peace sign. The third sits in a squatting position. Code can be seen in the background."
+    },
+    "Students",
+    "Learn more",
+    {
+      "id": "7c8323f02f9b0e04f2dfb990c8a35ddb",
+      "type": "image",
+      "index": 6,
+      "tos_url": "https://assets.bosch.com/media/global/career/start_your_career/vsual-work-situation_res_800x450.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/start_your_career/vsual-work-situation_res_800x450.webp",
+      "note": "",
+      "alt": "Two graduates are talking at a high table and looking into a laptop."
+    },
+    "Graduates",
+    "Learn more",
+    {
+      "id": "541c9bd9fa0b863cd14bfb2792a61e13",
+      "type": "image",
+      "index": 7,
+      "tos_url": "https://assets.bosch.com/media/global/career/start_your_career/kristen-graham_res_800x450.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/start_your_career/kristen-graham_res_800x450.webp",
+      "note": "",
+      "alt": "A woman stands in an office and looks into the camera with a smile."
+    },
+    "Professionals",
+    "Learn more",
+    {
+      "id": "9ee5da7197a2294edebd99b8a75e6a1f",
+      "type": "video",
+      "index": 1,
+      "tos_url": "https://www.youtube.com/watch?v=zeMOf46O8_A",
+      "original_url": "https://www.youtube.com/watch?v=zeMOf46O8_A",
+      "note": "Stefan Grosch, member of the board of management and director of industrial relations at Robert Bosch GmbH, shares what it means to grow with Bosch and what work LikeABosch signifies to him.",
+      "alt": ""
+    },
+    "Great innovations deserve great stories",
+    "Learn more about our associates",
+    "We combine products with sensors, software and services and create cross-domain solutions from a single source for connected life. Create, code and develop the internet of things with us — from automated driving, via smart home, to industry 4.0: algorithm, data structure, machine learning, artificial intelligence, application and architecture for electronic systems.",
+    {
+      "id": "981169931e6cd28df0118b0c183e4683",
+      "type": "image",
+      "index": 8,
+      "tos_url": "https://assets.bosch.com/media/global/stories/leadership/jessica-isabel-mario_res_400x225.webp",
+      "original_url": "https://assets.bosch.com/media/global/stories/leadership/jessica-isabel-mario_res_400x225.webp",
+      "note": "",
+      "alt": "Collage with Jessica, Isabel, and Mario smiling at the camera."
+    },
+    "Story Career",
+    "How we live leadership at Bosch",
+    {
+      "id": "cdd2db4bb3f149f515b0a38f5d63e438",
+      "type": "image",
+      "index": 9,
+      "tos_url": "https://assets.bosch.com/media/global/stories/learning_at_bosch/learning-at-bosch-stage_res_400x225.webp",
+      "original_url": "https://assets.bosch.com/media/global/stories/learning_at_bosch/learning-at-bosch-stage_res_400x225.webp",
+      "note": "",
+      "alt": "Hamza, Antonio and Karolina stand in front of a workshop board covered with sticky notes."
+    },
+    "Story Career",
+    "Learning at Bosch",
+    {
+      "id": "f0f4ed445e81244e791a423498f4d3bd",
+      "type": "image",
+      "index": 10,
+      "tos_url": "https://assets.bosch.com/media/global/stories/diversity_worldwide/stage_lei-china-chatting-with-team-smiling_res_400x225.webp",
+      "original_url": "https://assets.bosch.com/media/global/stories/diversity_worldwide/stage_lei-china-chatting-with-team-smiling_res_400x225.webp",
+      "note": "",
+      "alt": "Lei from China chats with her team and smiles."
+    },
+    "Story Career",
+    "United by difference",
+    {
+      "id": "6c00a06ebdb23f2ae54f06a73d505be9",
+      "type": "image",
+      "index": 11,
+      "tos_url": "https://assets.bosch.com/media/global/stories/csrd/patrick-corporate-office-finance-and-reporting_res_400x225.webp",
+      "original_url": "https://assets.bosch.com/media/global/stories/csrd/patrick-corporate-office-finance-and-reporting_res_400x225.webp",
+      "note": "",
+      "alt": "Patrick sits surrounded by green plants on a bench with his laptop and smiles."
+    },
+    "Story Career",
+    "More data, more insight: Transparency in sustainability",
+    {
+      "id": "37db1370e28dbb4bf9fc6a6324db6d5e",
+      "type": "image",
+      "index": 12,
+      "tos_url": "https://assets.bosch.com/media/global/stories/sabbatical/reiner-sabbatical_res_400x225.webp",
+      "original_url": "https://assets.bosch.com/media/global/stories/sabbatical/reiner-sabbatical_res_400x225.webp",
+      "note": "",
+      "alt": "Reiner stands in front of his mountain hut in the Allgäu Alps, laptop in hand."
+    },
+    "Story Career",
+    "Between two worlds: working at Bosch and running a mountain hut",
+    "At Bosch, you change lives",
+    "We love our business — and our environment. Based on a charitable foundation, we invent technology for life while supporting social and environmental projects at the same time. Leave a lasting mark on the world with innovative, beneficial and smart solutions.",
+    {
+      "id": "33ae70eafafec90fd6ac5a1f107547e7",
+      "type": "image",
+      "index": 13,
+      "tos_url": "https://assets.bosch.com/media/global/career/woman-in-suit_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/woman-in-suit_res_1280x720.webp",
+      "note": "",
+      "alt": "A woman is wearing a tailored suit with a all over print which says \"CO2 neutral\"."
+    },
+    "Sustainability at Bosch",
+    {
+      "id": "33ae70eafafec90fd6ac5a1f107547e7",
+      "type": "image",
+      "index": 14,
+      "tos_url": "https://assets.bosch.com/media/global/career/woman-in-suit_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/woman-in-suit_res_1280x720.webp",
+      "note": "",
+      "alt": "A woman is wearing a tailored suit with a all over print which says \"CO2 neutral\"."
+    },
+    "Sustainability at Bosch",
+    "We aim to develop ‘technology for life’ . Our commitment to sustainability, to the ‘long term’, is deep in our DNA. More than 400 of our locations are already CO₂-neutral, yet we want to do more to reduce our impact on the climate. We want to shape climate change and closely examine the CO₂ footprint of our products, procured goods and logistics chain. And we support every one of our employees on their personal path to a sustainable lifestyle.",
+    "Sustainability website",
+    {
+      "id": "31d1f15e05f7e4ea15910850473c7ef2",
+      "type": "image",
+      "index": 15,
+      "tos_url": "https://assets.bosch.com/media/global/sustainability/society/employees_commitment/robert-bosch-stiftung_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/sustainability/society/employees_commitment/robert-bosch-stiftung_res_1280x720.webp",
+      "note": "",
+      "alt": "The Robert Bosch Stiftung"
+    },
+    "The Robert Bosch Stiftung — our basis",
+    {
+      "id": "31d1f15e05f7e4ea15910850473c7ef2",
+      "type": "image",
+      "index": 16,
+      "tos_url": "https://assets.bosch.com/media/global/sustainability/society/employees_commitment/robert-bosch-stiftung_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/sustainability/society/employees_commitment/robert-bosch-stiftung_res_1280x720.webp",
+      "note": "",
+      "alt": "The Robert Bosch Stiftung"
+    },
+    "The Robert Bosch Stiftung — our basis",
+    "To focus on our mission we have to remain completely independent of outside pressures and focus on creating technologies that contribute and improve people’s lives. As a GmbH, we are independent of stock markets and 94% of our company shares are held by the non-profit Robert Bosch Foundation. Through them, our company profits flow into non-profit projects and organisations in the fields of health, education and global issues. Our success makes a visible difference to the world around us and it inspires us to create, innovate and improve the world even more.",
+    "Robert Bosch Stiftung",
+    {
+      "id": "8f7a5510a71b187ec1e99783ac836e2b",
+      "type": "image",
+      "index": 17,
+      "tos_url": "https://assets.bosch.com/media/global/fallback/fallback-16x9_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/fallback/fallback-16x9_res_1280x720.webp",
+      "note": "",
+      "alt": "Bosch in Renningen"
+    },
+    "Invented for life",
+    {
+      "id": "8f7a5510a71b187ec1e99783ac836e2b",
+      "type": "image",
+      "index": 18,
+      "tos_url": "https://assets.bosch.com/media/global/fallback/fallback-16x9_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/fallback/fallback-16x9_res_1280x720.webp",
+      "note": "",
+      "alt": "Bosch in Renningen"
+    },
+    "Invented for life",
+    "For over 100 years we have been a place for sparks, catalysts, thinkers, pioneers and problem solvers who are always looking for new and exciting challenges that enrich people's lives. Highlights include:",
+    "With a modern, spacious and inspiring working environment, we deliberately foster collaboration, teamwork and disruptive, innovative thinking. Step inside and you‘ll find space for learning together and networking, freedom to think, and an awesome team all working together to change lives.",
+    "Products and services",
+    {
+      "id": "a758d2b4900c3ad14950e5898c09e128",
+      "type": "image",
+      "index": 19,
+      "tos_url": "https://assets.bosch.com/media/global/bosch_group/our_history/robert-bosch-and-his-associates_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/bosch_group/our_history/robert-bosch-and-his-associates_res_1280x720.webp",
+      "note": "",
+      "alt": "Robert Bosch standing between his associates."
+    },
+    "A future built on our past: Our history",
+    {
+      "id": "a758d2b4900c3ad14950e5898c09e128",
+      "type": "image",
+      "index": 20,
+      "tos_url": "https://assets.bosch.com/media/global/bosch_group/our_history/robert-bosch-and-his-associates_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/bosch_group/our_history/robert-bosch-and-his-associates_res_1280x720.webp",
+      "note": "",
+      "alt": "Robert Bosch standing between his associates."
+    },
+    "A future built on our past: Our history",
+    "A company with a past, a job with a future.",
+    "We can only shape tomorrow by building on our shared history. In 1886 Robert Bosch founded the \"Workshop for Precision Mechanics and Electrical Engineering\" in Stuttgart. This ignited our global organisation. We were shaped by innovation and social commitment from the start. We continue to reinvent and remodel our business, but those foundation stones remain.",
+    "Time travel: discover our history",
+    "Awards",
+    {
+      "id": "e5b8a42adba48a80f0af167f7ed89334",
+      "type": "image",
+      "index": 21,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/forbes-worlds-best-employers-2025_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/forbes-worlds-best-employers-2025_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Forbes Worlds Best Employers 2025"
+    },
+    {
+      "id": "ad23b756094a287cd0a0ecc2ae88fa07",
+      "type": "image",
+      "index": 22,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-vietnam_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-vietnam_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Great place to work Vietnam"
+    },
+    {
+      "id": "15df49ec34cfb5d809ce1f206ea7e29d",
+      "type": "image",
+      "index": 23,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/fortune-southeast-asia-vn_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/fortune-southeast-asia-vn_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Fortune Southeast Asia Vietnam"
+    },
+    {
+      "id": "af95419ad9f08895479fd4714b58ae26",
+      "type": "image",
+      "index": 24,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-usa_res_1280x720-2.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-usa_res_1280x720-2.webp",
+      "note": "",
+      "alt": "Logo Great place to work USA"
+    },
+    {
+      "id": "fead2568ae5fad3abb3d9f1055498128",
+      "type": "image",
+      "index": 25,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-brazil_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-brazil_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Great place to work Brazil"
+    },
+    {
+      "id": "b3431bf1d81dd42fb24f08e9521b087a",
+      "type": "image",
+      "index": 26,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-thailand_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-thailand_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Great place to work Thailand"
+    },
+    {
+      "id": "636b61f46ab8346708055c8601c8dc25",
+      "type": "image",
+      "index": 27,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-columbia_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-columbia_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Great place to work Columbia"
+    },
+    {
+      "id": "d5779c074170af308e6683535dd6c1e0",
+      "type": "image",
+      "index": 28,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-india_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-india_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Great place to work India"
+    },
+    {
+      "id": "66ecf770c75e767e3e4e3bf32d6c701b",
+      "type": "image",
+      "index": 29,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-chile_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-chile_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Great place to work Chile"
+    },
+    {
+      "id": "1a4115f5a0c0cf57a7d612e6205fe136",
+      "type": "image",
+      "index": 30,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-poland_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/great-place-to-work-poland_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Great place to work Poland"
+    },
+    {
+      "id": "e4a4cf732a4ac4619559e94e28d9e38c",
+      "type": "image",
+      "index": 31,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/elearning-journal-award_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/elearning-journal-award_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo eLearning Journal"
+    },
+    {
+      "id": "3d21efbaabff89c716ecd1d8815c7a1a",
+      "type": "image",
+      "index": 32,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/universum-it-students-2024_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/universum-it-students-2024_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Universum IT students 2024"
+    },
+    {
+      "id": "f319315a4a6fc86a53af12dad7c2ffc2",
+      "type": "image",
+      "index": 33,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/universum-engineering-students-2024_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/universum-engineering-students-2024_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Universum engineering students 2024"
+    },
+    {
+      "id": "647bb032729d0034c89436db447e683b",
+      "type": "image",
+      "index": 34,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/universum-it-students-2023_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/universum-it-students-2023_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Universum IT students 2023"
+    },
+    {
+      "id": "a1da92781fcaed4221ca430a9a85b91b",
+      "type": "image",
+      "index": 35,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/universum-engineering-students-2023_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/universum-engineering-students-2023_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Universum engineering students 2023"
+    },
+    {
+      "id": "88b151625aefbe09dc8a4c40bb6a246d",
+      "type": "image",
+      "index": 36,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/universum-it-students-germany-2023_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/universum-it-students-germany-2023_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Universum IT young professionals Germany 2023"
+    },
+    {
+      "id": "9e366e4164093181d57448a2808f1483",
+      "type": "image",
+      "index": 37,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/universum-engineering-students-germany-2023_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/universum-engineering-students-germany-2023_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Universum engineering young professionals Germany 2023"
+    },
+    {
+      "id": "a9b208831e768140cb321d080fc42056",
+      "type": "image",
+      "index": 38,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/linkedin-top-companies-deutschland-2025_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/linkedin-top-companies-deutschland-2025_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo LinkedIn Top Company"
+    },
+    {
+      "id": "3c7aa1868d951832bf60dadaacde6ca2",
+      "type": "image",
+      "index": 39,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/women-automotiv-award_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/women-automotiv-award_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Women Automotive Awards"
+    },
+    {
+      "id": "00d6be6441a2b35e5e700208a204f82e",
+      "type": "image",
+      "index": 40,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/top-employer-china_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/top-employer-china_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Top Employer China"
+    },
+    {
+      "id": "377939e367acaa1c2fd50957431a2dd3",
+      "type": "image",
+      "index": 41,
+      "tos_url": "https://assets.bosch.com/media/global/career/awards_1/top-employer-united-kingdom-2025_res_1280x720.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/awards_1/top-employer-united-kingdom-2025_res_1280x720.webp",
+      "note": "",
+      "alt": "Logo Top Employer United Kingdom"
+    },
+    {
+      "id": "fdd5246af45e0700eb780931ec79adde",
+      "type": "image",
+      "index": 42,
+      "tos_url": "https://assets.bosch.com/media/global/career/join-the-team_res_1984x1116.webp",
+      "original_url": "https://assets.bosch.com/media/global/career/join-the-team_res_1984x1116.webp",
+      "note": "",
+      "alt": "A diverse group is holding scarves with the inscription “Join the Team” in the air and is pointing to an empty office chair."
+    },
+    "Work LikeABosch — Apply now",
+    "Find new jobs worldwide"
+  ],
+  "extra": {}
+}
