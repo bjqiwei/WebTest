@@ -206,6 +206,7 @@ def test_fetch_html_auto_fallback_to_playwright(monkeypatch):
         encoding = 'utf-8'
         apparent_encoding = 'utf-8'
         text = '<html><title>Just a moment...</title></html>'
+        headers = {'content-type': 'text/html; charset=utf-8'}
 
         def raise_for_status(self):
             return None
@@ -224,23 +225,66 @@ def test_fetch_html_playwright_mode(monkeypatch):
 
 
 def test_fetch_html_blocked_after_playwright(monkeypatch):
-  class DummyResp:
-    status_code = 403
-    encoding = 'utf-8'
-    apparent_encoding = 'utf-8'
-    text = '<html><title>Just a moment...</title></html>'
+    class DummyResp:
+        status_code = 403
+        encoding = 'utf-8'
+        apparent_encoding = 'utf-8'
+        text = '<html><title>Just a moment...</title></html>'
+        headers = {'content-type': 'text/html; charset=utf-8'}
 
-    def raise_for_status(self):
-      raise requests.HTTPError('403')
+        def raise_for_status(self):
+            raise requests.HTTPError('403')
 
-  import requests
+    import requests
 
-  monkeypatch.setattr('src.scraper.requests.get', lambda *args, **kwargs: DummyResp())
-  monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: '<html><title>Just a moment...</title></html>')
+    monkeypatch.setattr('src.scraper.requests.get', lambda *args, **kwargs: DummyResp())
+    monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: '<html><title>Just a moment...</title></html>')
 
-  try:
-    fetch_html('https://example.com', renderer='auto')
-  except RuntimeError as exc:
-    assert 'Blocked by target site' in str(exc)
-  else:
-    assert False, 'Expected RuntimeError for blocked page'
+    try:
+        fetch_html('https://example.com', renderer='auto')
+    except RuntimeError as exc:
+        assert 'Blocked by target site' in str(exc)
+    else:
+        assert False, 'Expected RuntimeError for blocked page'
+
+
+def test_scrape_site_progress_uses_fixed_total(monkeypatch, tmp_path):
+    pages = {
+        'https://example.com/': '<html><body><a href="/a.html">a</a></body></html>',
+        'https://example.com/a.html': '<html><body><a href="/b.html">b</a></body></html>',
+        'https://example.com/b.html': '<html><body><p>end</p></body></html>',
+    }
+
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: pages[url])
+
+    progress = []
+
+    def callback(done, total, url):
+        progress.append((done, total, url))
+
+    result = scrape_site(
+        'https://example.com',
+        tmp_path,
+        max_depth=-1,
+        max_pages=0,
+        progress_callback=callback,
+    )
+
+    assert result['page_count'] == 3
+    assert [p[0] for p in progress] == [1, 2, 3]
+    assert [p[1] for p in progress] == [3, 3, 3]
+
+
+def test_scrape_site_skips_non_html_content_without_extension(monkeypatch, tmp_path):
+    pages = {
+        'https://example.com/': '<html><body><a href="/img/noext">img</a><a href="/ok.html">ok</a></body></html>',
+        'https://example.com/img/noext': 'JFIF_BINARY_BYTES',
+        'https://example.com/ok.html': '<!doctype html><html><body><p>ok</p></body></html>',
+    }
+
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: pages[url])
+
+    result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
+    assert result['page_count'] == 2
+    assert 'https://example.com/img/noext' in result['failed']
+    assert result['failed_reasons']['https://example.com/img/noext'] == 'non_html_document'

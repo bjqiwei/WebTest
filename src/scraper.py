@@ -35,6 +35,7 @@ NON_HTML_FILE_RE = re.compile(
     r'\.(pdf|zip|rar|7z|tar|gz|docx?|xlsx?|pptx?|csv|xml|json|txt|css|js|map|ico|woff2?|ttf|eot|otf|mp3|wav|ogg|mp4|m3u8|webm|avi|mov)(\?|$)',
     re.I,
 )
+HTML_CONTENT_TYPE_RE = re.compile(r'text/html|application/xhtml\+xml', re.I)
 
 
 def _safe_name_from_url(url: str) -> str:
@@ -299,9 +300,20 @@ def _extract_links(html: str, base_url: str, root_host: str):
     return links
 
 
+def _mark_failed(url: str, reason: str, failed: list, failed_reasons: dict):
+    if url not in failed_reasons:
+        failed.append(url)
+    failed_reasons[url] = reason
+
+
 def extract_videos(html: str, base_url: str):
     soup = BeautifulSoup(html, 'html.parser')
     return _extract_video_items(soup, base_url)
+
+
+def _is_html_document(html: str) -> bool:
+    sample = (html or '')[:4000].lower()
+    return ('<html' in sample) or ('<!doctype html' in sample)
 
 
 def _is_challenge_or_block_page(html: str) -> bool:
@@ -328,7 +340,11 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         )
         page = context.new_page()
-        page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
+        response = page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
+        if response is not None:
+            ctype = response.headers.get('content-type', '')
+            if ctype and not HTML_CONTENT_TYPE_RE.search(ctype):
+                raise RuntimeError(f'Non-HTML content type: {ctype}')
         # Allow challenge scripts and async rendering to complete.
         if wait_seconds > 0:
             time.sleep(wait_seconds)
@@ -362,6 +378,9 @@ def fetch_html(
     try:
         r = requests.get(url, headers=headers, timeout=timeout)
         r.raise_for_status()
+        ctype = r.headers.get('content-type', '')
+        if ctype and not HTML_CONTENT_TYPE_RE.search(ctype):
+            raise RuntimeError(f'Non-HTML content type: {ctype}')
         # Many sites return missing/incorrect charset headers. Prefer apparent encoding
         # so Unicode punctuation like em dash is preserved in saved JSON.
         if not r.encoding or r.encoding.lower() in ('iso-8859-1', 'latin1'):
@@ -431,6 +450,7 @@ def scrape_site(
     renderer: str = 'auto',
     playwright_headless: bool = True,
     playwright_wait_seconds: float = 5.0,
+    progress_callback=None,
 ):
     start_url = _normalize_url(url)
     if not start_url:
@@ -446,11 +466,14 @@ def scrape_site(
     failed_reasons = {}
     total_videos = 0
     total_media = 0
+    discovered_urls = []
+    html_cache = {}
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     unlimited_depth = max_depth < 0
     unlimited_pages = max_pages <= 0
 
-    while queue and (unlimited_pages or len(pages) < max_pages):
+    # Phase 1: recursively discover and fetch all HTML pages to establish a stable total.
+    while queue and (unlimited_pages or len(discovered_urls) < max_pages):
         current_url, depth = queue.popleft()
         if current_url in visited:
             continue
@@ -464,10 +487,36 @@ def scrape_site(
                 playwright_wait_seconds=playwright_wait_seconds,
             )
         except Exception as exc:
-            failed.append(current_url)
-            failed_reasons[current_url] = str(exc)
+            _mark_failed(current_url, str(exc), failed, failed_reasons)
             continue
 
+        if not _is_html_document(html):
+            _mark_failed(current_url, 'non_html_document', failed, failed_reasons)
+            continue
+
+        discovered_urls.append(current_url)
+        html_cache[current_url] = html
+
+        if not unlimited_depth and depth >= max_depth:
+            continue
+
+        try:
+            links = _extract_links(html, current_url, root_host)
+        except Exception:
+            _mark_failed(current_url, 'link_extract_error', failed, failed_reasons)
+            links = []
+
+        for link in links:
+            if link not in visited:
+                queue.append((link, depth + 1))
+
+    # Phase 2: parse and save with fixed total HTML count.
+    total_known_html = len(discovered_urls)
+    for idx, current_url in enumerate(discovered_urls, start=1):
+        if callable(progress_callback):
+            progress_callback(idx, total_known_html, current_url)
+
+        html = html_cache[current_url]
         try:
             page_data = _save_page_output(
                 current_url,
@@ -477,12 +526,11 @@ def scrape_site(
                 timestamp=timestamp,
             )
         except Exception:
-            failed.append(current_url)
-            failed_reasons[current_url] = 'parse_or_save_error'
+            _mark_failed(current_url, 'parse_or_save_error', failed, failed_reasons)
             continue
+
         total_videos += page_data['video_count']
         total_media += page_data['media_count']
-
         pages.append(
             {
                 'url': current_url,
@@ -492,20 +540,6 @@ def scrape_site(
                 'media_count': page_data['media_count'],
             }
         )
-
-        if not unlimited_depth and depth >= max_depth:
-            continue
-
-        try:
-            links = _extract_links(html, current_url, root_host)
-        except Exception:
-            failed.append(current_url)
-            failed_reasons[current_url] = 'link_extract_error'
-            links = []
-
-        for link in links:
-            if link not in visited:
-                queue.append((link, depth + 1))
 
     summary = {
         'start_url': start_url,

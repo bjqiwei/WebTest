@@ -24,6 +24,9 @@ def main():
         max_depth = -1
         max_pages = 0
 
+    def _progress(parsed_count, total_count, current_url):
+        print(f'[{parsed_count}/{total_count}] {current_url}')
+
     result = scrape_site(
         args.url,
         outdir,
@@ -32,6 +35,7 @@ def main():
         renderer=args.renderer,
         playwright_headless=not args.headed,
         playwright_wait_seconds=max(args.wait_seconds, 0.0),
+        progress_callback=_progress,
     )
     print('抓取完成')
     print(f'{result["page_count"]}个页面，{result.get("media_count", 0)}个媒体元素')
