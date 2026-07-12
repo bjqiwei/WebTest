@@ -126,13 +126,14 @@ def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
     pages = {
         'https://example.com/': '''
         <html><body><main>
-          <a href="/careers">careers</a>
+          <a href="/careers.html">careers</a>
+          <a href="/about.css">about-style</a>
           <a href="/brochure.pdf">brochure</a>
           <a href="https://other.com/page">external</a>
           <video src="/v0.mp4"></video>
         </main></body></html>
       ''',
-        'https://example.com/careers': '''
+        'https://example.com/careers.html': '''
         <html><body><main>
           <iframe src="https://www.youtube.com/embed/abc"></iframe>
         </main></body></html>
@@ -154,7 +155,7 @@ def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
     first = result['pages'][0]
     second = result['pages'][1]
     assert first['url'] == 'https://example.com/'
-    assert second['url'] == 'https://example.com/careers'
+    assert second['url'] == 'https://example.com/careers.html'
 
     summary = json.loads((tmp_path / 'example.com_index_summary.json').read_text(encoding='utf-8'))
     assert summary['page_count'] == 2
@@ -164,9 +165,9 @@ def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
 
 def test_scrape_site_unlimited_depth_and_pages(tmp_path, monkeypatch):
     pages = {
-        'https://example.com/': '<html><body><a href="/a">a</a></body></html>',
-        'https://example.com/a': '<html><body><a href="/b">b</a></body></html>',
-        'https://example.com/b': '<html><body><p>end</p></body></html>',
+    'https://example.com/': '<html><body><a href="/a.html">a</a></body></html>',
+    'https://example.com/a.html': '<html><body><a href="/b.html">b</a></body></html>',
+    'https://example.com/b.html': '<html><body><p>end</p></body></html>',
     }
 
     monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: pages[url])
@@ -177,9 +178,9 @@ def test_scrape_site_unlimited_depth_and_pages(tmp_path, monkeypatch):
 
 def test_scrape_site_skip_parse_error_and_continue(tmp_path, monkeypatch):
     pages = {
-        'https://example.com/': '<html><body><a href="/bad">bad</a><a href="/good">good</a></body></html>',
-        'https://example.com/bad': '<html><body><main>bad page</main></body></html>',
-        'https://example.com/good': '<html><body><main><p>ok</p></main></body></html>',
+  'https://example.com/': '<html><body><a href="/bad.html">bad</a><a href="/good.html">good</a></body></html>',
+  'https://example.com/bad.html': '<html><body><main>bad page</main></body></html>',
+  'https://example.com/good.html': '<html><body><main><p>ok</p></main></body></html>',
     }
 
     monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: pages[url])
@@ -187,7 +188,7 @@ def test_scrape_site_skip_parse_error_and_continue(tmp_path, monkeypatch):
     original_save = scraper_module._save_page_output
 
     def flaky_save(url, html, outdir, page_index, timestamp):
-        if url.endswith('/bad'):
+        if url.endswith('/bad.html'):
             raise ValueError('parse error')
         return original_save(url, html, outdir, page_index, timestamp)
 
@@ -196,7 +197,7 @@ def test_scrape_site_skip_parse_error_and_continue(tmp_path, monkeypatch):
     result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
     assert result['page_count'] == 2
     assert result['failed_count'] == 1
-    assert 'https://example.com/bad' in result['failed']
+    assert 'https://example.com/bad.html' in result['failed']
 
 
 def test_fetch_html_auto_fallback_to_playwright(monkeypatch):

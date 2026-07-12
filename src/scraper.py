@@ -31,6 +31,10 @@ VIDEO_FILE_RE = re.compile(r'\.(mp4|m3u8|webm|ogg)(\?|$)', re.I)
 EMBED_RE = re.compile(r'youtube|youtu\.be|vimeo|player|wistia', re.I)
 IMAGE_FILE_RE = re.compile(r'\.(png|jpe?g|webp|gif|bmp|svg)(\?|$)', re.I)
 PDF_FILE_RE = re.compile(r'\.pdf(\?|$)', re.I)
+NON_HTML_FILE_RE = re.compile(
+    r'\.(pdf|zip|rar|7z|tar|gz|docx?|xlsx?|pptx?|csv|xml|json|txt|css|js|map|ico|woff2?|ttf|eot|otf|mp3|wav|ogg|mp4|m3u8|webm|avi|mov)(\?|$)',
+    re.I,
+)
 
 
 def _safe_name_from_url(url: str) -> str:
@@ -284,6 +288,10 @@ def _extract_links(html: str, base_url: str, root_host: str):
         if not resolved:
             continue
         if PDF_FILE_RE.search(resolved):
+            continue
+        # Keep likely HTML pages: .html/.htm, trailing slash, or extensionless paths.
+        # Skip obvious non-HTML file resources.
+        if NON_HTML_FILE_RE.search(resolved):
             continue
         if not _is_same_domain(resolved, root_host):
             continue
