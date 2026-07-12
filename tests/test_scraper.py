@@ -1,19 +1,245 @@
+import json
+import re
 from pathlib import Path
-from src.scraper import extract_videos
+import src.scraper as scraper_module
+
+from src.scraper import (
+  extract_content_blocks,
+  extract_videos,
+  fetch_html,
+  scrape_site,
+  scrape_url,
+)
 
 
 def test_extract_videos_from_html():
     html = '''
     <html>
       <body>
-        <video src="/media/v1.mp4"></video>
-        <figure><video><source src="https://cdn.example.com/v2.webm"></source></video><figcaption>Vid 2</figcaption></figure>
-        <a href="https://cdn.example.com/movie.mp4">download</a>
+        <header><a href="/menu.mp4">menu</a></header>
+        <main>
+          <p>Intro paragraph for the first video.</p>
+          <video src="/media/v1.mp4"></video>
+          <figure>
+            <video><source src="https://cdn.example.com/v2.webm"></source></video>
+            <figcaption>Vid 2</figcaption>
+          </figure>
+          <iframe src="https://www.youtube.com/embed/abc123"></iframe>
+          <a href="https://cdn.example.com/movie.mp4">download</a>
+          <a href="https://cdn.example.com/movie.mp4">download duplicate</a>
+        </main>
       </body>
     </html>
     '''
 
     videos = extract_videos(html, 'https://example.com')
-    assert any('v1.mp4' in v['url'] for v in videos)
-    assert any('v2.webm' in v['url'] for v in videos)
-    assert any('movie.mp4' in v['url'] for v in videos)
+    assert len(videos) == 4
+    assert videos[0]['original_url'].endswith('/media/v1.mp4')
+    assert videos[1]['original_url'] == 'https://cdn.example.com/v2.webm'
+    assert videos[1]['note'] == 'Vid 2'
+    assert videos[2]['original_url'] == 'https://www.youtube.com/embed/abc123'
+    assert videos[3]['original_url'] == 'https://cdn.example.com/movie.mp4'
+    assert [v['index'] for v in videos] == [1, 2, 3, 4]
+
+
+def test_scrape_url_outputs_counter_and_json(tmp_path, monkeypatch):
+    sample_html = '''
+    <html>
+      <body>
+        <main>
+          <p>Video description text around content area.</p>
+          <video src="https://cdn.example.com/a.mp4"></video>
+        </main>
+      </body>
+    </html>
+    '''
+
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: sample_html)
+
+    result = scrape_url('https://www.bosch.com/careers', tmp_path)
+
+    assert result['page_count'] == 1
+    assert result['video_count'] == 1
+    assert result['media_count'] == 1
+
+    assert re.search(r'0001_careers_html_\d{14}\.json$', result['json_path'])
+    json_path = tmp_path / Path(result['json_path']).name
+    data = json.loads(json_path.read_text(encoding='utf-8'))
+    assert data['original_link'] == 'https://www.bosch.com/careers'
+    assert 'content_blocks' in data
+    assert data['extra'] == {}
+    media_items = [b for b in data['content_blocks'] if isinstance(b, dict)]
+    assert media_items[0]['original_url'] == 'https://cdn.example.com/a.mp4'
+    assert media_items[0]['type'] == 'video'
+
+
+def test_extract_content_blocks_with_image_and_video():
+    html = '''
+    <html>
+      <body>
+        <main>
+          <h1>Careers</h1>
+          <p>Work with us</p>
+          <img src="/hero.webp" alt="Hero banner" />
+          <video src="/intro.mp4"></video>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com/careers')
+    assert 'Careers' in blocks
+    assert 'Work with us' in blocks
+    media_items = [b for b in blocks if isinstance(b, dict)]
+    assert len(media_items) == 2
+    assert media_items[0]['type'] == 'image'
+    assert media_items[0]['alt'] == 'Hero banner'
+    assert media_items[0]['index'] == 1
+    assert media_items[1]['type'] == 'video'
+    assert media_items[1]['index'] == 2
+
+
+def test_extract_content_blocks_excludes_related_section():
+    html = '''
+    <html>
+      <body>
+        <main>
+          <h1>Main title</h1>
+          <p>Main content</p>
+          <section class="related">
+            <h2>Related</h2>
+            <p>Related article</p>
+          </section>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com/page')
+    assert 'Main title' in blocks
+    assert 'Main content' in blocks
+    assert 'Related' not in blocks
+    assert 'Related article' not in blocks
+
+
+def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
+    pages = {
+        'https://example.com/': '''
+        <html><body><main>
+          <a href="/careers">careers</a>
+          <a href="/brochure.pdf">brochure</a>
+          <a href="https://other.com/page">external</a>
+          <video src="/v0.mp4"></video>
+        </main></body></html>
+      ''',
+        'https://example.com/careers': '''
+        <html><body><main>
+          <iframe src="https://www.youtube.com/embed/abc"></iframe>
+        </main></body></html>
+      ''',
+    }
+
+    def fake_fetch(url, **kwargs):
+        return pages[url]
+
+    monkeypatch.setattr('src.scraper.fetch_html', fake_fetch)
+
+    result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
+
+    assert result['page_count'] == 2
+    assert result['video_count'] == 2
+    assert result['media_count'] == 2
+    assert result['failed_count'] == 0
+
+    first = result['pages'][0]
+    second = result['pages'][1]
+    assert first['url'] == 'https://example.com/'
+    assert second['url'] == 'https://example.com/careers'
+
+    summary = json.loads((tmp_path / 'example.com_index_summary.json').read_text(encoding='utf-8'))
+    assert summary['page_count'] == 2
+    assert summary['video_count'] == 2
+    assert summary['media_count'] == 2
+
+
+def test_scrape_site_unlimited_depth_and_pages(tmp_path, monkeypatch):
+    pages = {
+        'https://example.com/': '<html><body><a href="/a">a</a></body></html>',
+        'https://example.com/a': '<html><body><a href="/b">b</a></body></html>',
+        'https://example.com/b': '<html><body><p>end</p></body></html>',
+    }
+
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: pages[url])
+
+    result = scrape_site('https://example.com', tmp_path, max_depth=-1, max_pages=0)
+    assert result['page_count'] == 3
+
+
+def test_scrape_site_skip_parse_error_and_continue(tmp_path, monkeypatch):
+    pages = {
+        'https://example.com/': '<html><body><a href="/bad">bad</a><a href="/good">good</a></body></html>',
+        'https://example.com/bad': '<html><body><main>bad page</main></body></html>',
+        'https://example.com/good': '<html><body><main><p>ok</p></main></body></html>',
+    }
+
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: pages[url])
+
+    original_save = scraper_module._save_page_output
+
+    def flaky_save(url, html, outdir, page_index, timestamp):
+        if url.endswith('/bad'):
+            raise ValueError('parse error')
+        return original_save(url, html, outdir, page_index, timestamp)
+
+    monkeypatch.setattr('src.scraper._save_page_output', flaky_save)
+
+    result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
+    assert result['page_count'] == 2
+    assert result['failed_count'] == 1
+    assert 'https://example.com/bad' in result['failed']
+
+
+def test_fetch_html_auto_fallback_to_playwright(monkeypatch):
+    class DummyResp:
+        status_code = 200
+        encoding = 'utf-8'
+        apparent_encoding = 'utf-8'
+        text = '<html><title>Just a moment...</title></html>'
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr('src.scraper.requests.get', lambda *args, **kwargs: DummyResp())
+    monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: '<html><main>ok</main></html>')
+
+    html = fetch_html('https://example.com', renderer='auto')
+    assert '<main>ok</main>' in html
+
+
+def test_fetch_html_playwright_mode(monkeypatch):
+    monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: '<html>pw</html>')
+    html = fetch_html('https://example.com', renderer='playwright')
+    assert 'pw' in html
+
+
+def test_fetch_html_blocked_after_playwright(monkeypatch):
+  class DummyResp:
+    status_code = 403
+    encoding = 'utf-8'
+    apparent_encoding = 'utf-8'
+    text = '<html><title>Just a moment...</title></html>'
+
+    def raise_for_status(self):
+      raise requests.HTTPError('403')
+
+  import requests
+
+  monkeypatch.setattr('src.scraper.requests.get', lambda *args, **kwargs: DummyResp())
+  monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: '<html><title>Just a moment...</title></html>')
+
+  try:
+    fetch_html('https://example.com', renderer='auto')
+  except RuntimeError as exc:
+    assert 'Blocked by target site' in str(exc)
+  else:
+    assert False, 'Expected RuntimeError for blocked page'
