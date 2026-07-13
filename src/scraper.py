@@ -372,7 +372,7 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
 
 def fetch_html(
     url: str,
-    timeout=15,
+    timeout=60,
     renderer: str = 'auto',
     playwright_headless: bool = True,
     playwright_wait_seconds: float = 5.0,
@@ -383,7 +383,7 @@ def fetch_html(
     if renderer == 'playwright':
         html = fetch_html_with_playwright(
             url,
-            timeout=max(timeout, 20),
+            timeout=max(timeout, 60),
             headless=playwright_headless,
             wait_seconds=playwright_wait_seconds,
         )
@@ -406,7 +406,7 @@ def fetch_html(
         if renderer == 'auto':
             html = fetch_html_with_playwright(
                 url,
-                timeout=max(timeout, 20),
+                timeout=max(timeout, 60),
                 headless=playwright_headless,
                 wait_seconds=playwright_wait_seconds,
             )
@@ -418,7 +418,7 @@ def fetch_html(
     if renderer == 'auto' and _is_challenge_or_block_page(html):
         html = fetch_html_with_playwright(
             url,
-            timeout=max(timeout, 20),
+            timeout=max(timeout, 60),
             headless=playwright_headless,
             wait_seconds=playwright_wait_seconds,
         )
@@ -486,16 +486,16 @@ def _html_cache_path(start_url: str, outdir: Path) -> Path:
 def _load_html_cache(start_url: str, outdir: Path):
     cache_path = _html_cache_path(start_url, outdir)
     if not cache_path.exists():
-        return {}
+        return []
 
     try:
         with open(cache_path, 'r', encoding='utf-8') as f:
             payload = json.load(f)
     except Exception:
-        return {}
+        return []
 
     entries = payload.get('pages', []) if isinstance(payload, dict) else []
-    cache = {}
+    cache = []
     for item in entries:
         if not isinstance(item, dict):
             continue
@@ -504,16 +504,13 @@ def _load_html_cache(start_url: str, outdir: Path):
         if not page_url or not html_path:
             continue
         if Path(html_path).exists():
-            cache[page_url] = html_path
+            cache.append({'url': page_url, 'html_path': html_path})
     return cache
 
 
-def _write_html_cache(start_url: str, outdir: Path, cache: dict):
+def _write_html_cache(start_url: str, outdir: Path, cache: list):
     cache_path = _html_cache_path(start_url, outdir)
-    pages = [
-        {'url': page_url, 'html_path': html_path}
-        for page_url, html_path in sorted(cache.items())
-    ]
+    pages = [item for item in cache if isinstance(item, dict) and item.get('url') and item.get('html_path')]
     payload = {
         'start_url': start_url,
         'saved_count': len(pages),
@@ -541,7 +538,6 @@ def save_site_html(
     root_host = urlparse(start_url).netloc
     visited = set()
     queue = deque([(start_url, 0)])
-    discovered_pages = []
     failed = []
     failed_reasons = {}
     html_cache = _load_html_cache(start_url, outdir)
@@ -552,7 +548,7 @@ def save_site_html(
     if callable(phase_callback):
         phase_callback('saving_html')
 
-    while queue and (unlimited_pages or len(discovered_pages) < max_pages):
+    while queue and (unlimited_pages or len(html_cache) < max_pages):
         current_url, depth = queue.popleft()
         if current_url in visited:
             continue
@@ -562,7 +558,11 @@ def save_site_html(
 
         html = ''
         html_path = ''
-        cached_path = html_cache.get(current_url, '')
+        cached_path = ''
+        for item in html_cache:
+            if item.get('url') == current_url:
+                cached_path = item.get('html_path', '')
+                break
         if cached_path:
             try:
                 html = Path(cached_path).read_text(encoding='utf-8')
@@ -587,8 +587,10 @@ def save_site_html(
             _mark_failed(current_url, 'non_html_document', failed, failed_reasons)
             continue
 
+        print(f"已抓取: {html_path}: {current_url}")
         if not html_path:
-            page_index = len(discovered_pages) + 1
+            page_index = len(html_cache) + 1
+            print(f"正在保存 HTML: {current_url} (深度 {depth}, 页面索引 {page_index})")
             try:
                 html_path = _save_html_snapshot(
                     current_url,
@@ -602,10 +604,8 @@ def save_site_html(
                 continue
 
             # Persist URL -> local HTML mapping after each new save.
-            html_cache[current_url] = html_path
+            html_cache.append({'url': current_url, 'html_path': html_path})
             _write_html_cache(start_url, outdir, html_cache)
-
-        discovered_pages.append({'url': current_url, 'html_path': html_path})
 
         if not unlimited_depth and depth >= max_depth:
             continue
@@ -620,7 +620,7 @@ def save_site_html(
             if link not in visited:
                 queue.append((link, depth + 1))
 
-    return _write_html_manifest(start_url, outdir, timestamp, discovered_pages, failed, failed_reasons)
+    return _write_html_manifest(start_url, outdir, timestamp, html_cache, failed, failed_reasons)
 
 
 def analyze_saved_html(manifest_path: Path, progress_callback=None, phase_callback=None):

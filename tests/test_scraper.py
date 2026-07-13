@@ -343,3 +343,8 @@ def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
     second = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=1, max_pages=10)
     assert second['saved_count'] == 2
     assert second['failed_count'] == 0
+
+    cache_payload = json.loads(cache_files[0].read_text(encoding='utf-8'))
+    assert cache_payload['saved_count'] == 2
+    assert cache_payload['pages'][0]['url'] == 'https://example.com/'
+    assert cache_payload['pages'][1]['url'] == 'https://example.com/a.html'
