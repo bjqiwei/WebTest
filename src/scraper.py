@@ -330,8 +330,63 @@ def _is_challenge_or_block_page(html: str) -> bool:
         'checking your browser',
         '/cdn-cgi/challenge-platform',
         'enable javascript and cookies',
+        '正在进行安全验证',
+        '请验证您是真人',
+        '安全服务防护恶意自动程序',
+        'cloudflare',
     )
     return any(m in sample for m in markers)
+
+
+def _try_click_challenge_checkbox(page) -> bool:
+    selectors = [
+        "input[type='checkbox']",
+        "[role='checkbox']",
+        "label:has-text('请验证您是真人')",
+        "label:has-text('Verify you are human')",
+        "text=请验证您是真人",
+        "text=Verify you are human",
+    ]
+
+    # Try direct click on main document.
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            if locator.count() > 0:
+                locator.click(timeout=250, force=True)
+                return True
+        except Exception:
+            continue
+
+    # Try click inside embedded challenge frames.
+    for frame in page.frames:
+        if frame == page.main_frame:
+            continue
+        for selector in selectors:
+            try:
+                locator = frame.locator(selector).first
+                if locator.count() > 0:
+                    locator.click(timeout=250, force=True)
+                    return True
+            except Exception:
+                continue
+
+    # Cloudflare challenge is often rendered in an iframe; try clicking iframe itself.
+    frame_selectors = [
+        "iframe[title*='security challenge']",
+        "iframe[title*='Cloudflare']",
+        "iframe[src*='challenges.cloudflare.com']",
+    ]
+    for selector in frame_selectors:
+        try:
+            locator = page.locator(selector).first
+            if locator.count() > 0:
+                locator.click(timeout=250, force=True)
+                return True
+        except Exception:
+            continue
+
+    return False
 
 
 def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, headless: bool = True) -> str:
@@ -358,26 +413,66 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
             # Some sites keep loading long-poll resources; proceed with timed readiness checks.
             pass
 
-        html = page.content()
-        wait_budget = max(wait_seconds, 20.0 if _is_challenge_or_block_page(html) else 5.0)
-        deadline = time.time() + wait_budget
+        def _capture_current_page_html() -> str:
+            current_html = page.content()
+            wait_budget = max(wait_seconds + 15.0, 20.0)
+            deadline = time.time() + wait_budget
+            settled_after_readable = False
 
-        # Wait for challenge clearance and a minimally complete document before capture.
-        while time.time() < deadline:
-            html = page.content()
-            lowered = html.lower()
-            has_body = '<body' in lowered
-            challenge = _is_challenge_or_block_page(html)
-            if has_body and not challenge:
-                break
-            page.wait_for_timeout(1000)
+            # Wait for challenge clearance and a minimally complete document before capture.
+            while time.time() < deadline:
+                current_html = page.content()
+                lowered = current_html.lower()
+                has_body = '<body' in lowered
+                if not has_body:
+                    page.wait_for_timeout(1000)
+                    continue
 
-        # Optional extra settle time for JS-heavy pages after body appears.
-        if wait_seconds > 0:
-            _log(f'页面已可读取，额外等待{wait_seconds:.1f}秒: {url}')
-            time.sleep(wait_seconds)
+                # 按要求：页面可读取后先额外等待，再判断是否挑战页。
+                if not settled_after_readable:
+                    settle_wait_seconds = max(wait_seconds, 5.0)
+                    remaining = max(0.0, deadline - time.time())
+                    actual_wait = min(settle_wait_seconds, remaining)
+                    _log(f'页面已可读取，额外等待{actual_wait:.1f}秒: {url}')
+                    if actual_wait > 0:
+                        time.sleep(actual_wait)
+                    settled_after_readable = True
+                    current_html = page.content()
+                    if time.time() >= deadline:
+                        break
 
-        html = page.content()
+                # 即使挑战页识别漏判，也持续尝试自动点击验证控件。
+                if _try_click_challenge_checkbox(page):
+                    _log(f'已尝试自动勾选安全验证: {url}')
+
+                challenge = _is_challenge_or_block_page(current_html)
+                if not challenge:
+                    break
+
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                page.wait_for_timeout(min(1000, int(remaining * 1000)))
+
+            return page.content()
+
+        html = _capture_current_page_html()
+        if (not _is_html_document(html)) or _is_challenge_or_block_page(html):
+            _log(f'首次读取HTML未成功，刷新后重试一次: {url}')
+            try:
+                response = page.reload(wait_until='domcontentloaded', timeout=timeout * 1000)
+                if response is not None:
+                    ctype = response.headers.get('content-type', '')
+                    if ctype and not HTML_CONTENT_TYPE_RE.search(ctype):
+                        raise RuntimeError(f'Non-HTML content type: {ctype}')
+                try:
+                    page.wait_for_load_state('load', timeout=timeout * 1000)
+                except Exception:
+                    pass
+                html = _capture_current_page_html()
+            except Exception as exc:
+                _log(f'刷新重试失败，继续使用首次读取结果: {url} -> {exc}')
+
         _log(f'HTML已抓取，准备关闭page: {url}')
         page.close()
         context.close()
