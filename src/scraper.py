@@ -31,6 +31,11 @@ VIDEO_FILE_RE = re.compile(r'\.(mp4|m3u8|webm|ogg)(\?|$)', re.I)
 EMBED_RE = re.compile(r'youtube|youtu\.be|vimeo|player|wistia', re.I)
 IMAGE_FILE_RE = re.compile(r'\.(png|jpe?g|webp|gif|bmp|svg)(\?|$)', re.I)
 HTML_CONTENT_TYPE_RE = re.compile(r'text/html|application/xhtml\+xml', re.I)
+DEFAULT_USER_AGENT = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+    'AppleWebKit/537.36 (KHTML, like Gecko) '
+    'Chrome/138.0.0.0 Safari/537.36'
+)
 
 
 def _log(message: str):
@@ -338,7 +343,7 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
         browser = p.chromium.launch(headless=headless)
         context = browser.new_context(
             ignore_https_errors=True,
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            user_agent=DEFAULT_USER_AGENT,
         )
         page = context.new_page()
         _log(f'开始打开页面: {url}')
@@ -389,7 +394,7 @@ def fetch_html(
     playwright_wait_seconds: float = 5.0,
 ) -> str:
     headers = {
-        'User-Agent': 'python-httrack/1.0 (+https://example.com)'
+        'User-Agent': DEFAULT_USER_AGENT
     }
     if renderer == 'playwright':
         html = fetch_html_with_playwright(
