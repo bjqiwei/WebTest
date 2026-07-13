@@ -309,3 +309,37 @@ def test_scrape_site_skips_non_html_content_without_extension(monkeypatch, tmp_p
     assert result['page_count'] == 2
     assert 'https://example.com/img/noext' in result['failed']
     assert result['failed_reasons']['https://example.com/img/noext'] == 'non_html_document'
+
+
+def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
+    pages = {
+        'https://example.com/': '<html><body><a href="/a.html">a</a></body></html>',
+        'https://example.com/a.html': '<html><body><p>a</p></body></html>',
+    }
+
+    fetch_calls = {'count': 0}
+
+    def fake_fetch(url, **kwargs):
+        fetch_calls['count'] += 1
+        return pages[url]
+
+    monkeypatch.setattr('src.scraper.fetch_html', fake_fetch)
+
+    first = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=1, max_pages=10)
+    assert first['saved_count'] == 2
+    assert fetch_calls['count'] == 2
+
+    cache_files = list(tmp_path.glob('*_html_cache.json'))
+    assert len(cache_files) == 1
+    cache_payload = json.loads(cache_files[0].read_text(encoding='utf-8'))
+    assert cache_payload['saved_count'] == 2
+    assert {p['url'] for p in cache_payload['pages']} == {'https://example.com/', 'https://example.com/a.html'}
+
+    def fail_fetch(url, **kwargs):
+        raise AssertionError(f'fetch_html should not be called for cached URL: {url}')
+
+    monkeypatch.setattr('src.scraper.fetch_html', fail_fetch)
+
+    second = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=1, max_pages=10)
+    assert second['saved_count'] == 2
+    assert second['failed_count'] == 0

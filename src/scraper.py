@@ -340,9 +340,30 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
             ctype = response.headers.get('content-type', '')
             if ctype and not HTML_CONTENT_TYPE_RE.search(ctype):
                 raise RuntimeError(f'Non-HTML content type: {ctype}')
-        # Allow challenge scripts and async rendering to complete.
+        try:
+            page.wait_for_load_state('load', timeout=timeout * 1000)
+        except Exception:
+            # Some sites keep loading long-poll resources; proceed with timed readiness checks.
+            pass
+
+        html = page.content()
+        wait_budget = max(wait_seconds, 20.0 if _is_challenge_or_block_page(html) else 5.0)
+        deadline = time.time() + wait_budget
+
+        # Wait for challenge clearance and a minimally complete document before capture.
+        while time.time() < deadline:
+            html = page.content()
+            lowered = html.lower()
+            has_body = '<body' in lowered
+            challenge = _is_challenge_or_block_page(html)
+            if has_body and not challenge:
+                break
+            page.wait_for_timeout(1000)
+
+        # Optional extra settle time for JS-heavy pages after body appears.
         if wait_seconds > 0:
             time.sleep(wait_seconds)
+
         html = page.content()
         context.close()
         browser.close()
@@ -458,6 +479,50 @@ def _write_html_manifest(start_url: str, outdir: Path, timestamp: str, pages: li
     return payload
 
 
+def _html_cache_path(start_url: str, outdir: Path) -> Path:
+    return outdir / f"{_safe_name_from_url(start_url)}_html_cache.json"
+
+
+def _load_html_cache(start_url: str, outdir: Path):
+    cache_path = _html_cache_path(start_url, outdir)
+    if not cache_path.exists():
+        return {}
+
+    try:
+        with open(cache_path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+    except Exception:
+        return {}
+
+    entries = payload.get('pages', []) if isinstance(payload, dict) else []
+    cache = {}
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        page_url = item.get('url', '')
+        html_path = item.get('html_path', '')
+        if not page_url or not html_path:
+            continue
+        if Path(html_path).exists():
+            cache[page_url] = html_path
+    return cache
+
+
+def _write_html_cache(start_url: str, outdir: Path, cache: dict):
+    cache_path = _html_cache_path(start_url, outdir)
+    pages = [
+        {'url': page_url, 'html_path': html_path}
+        for page_url, html_path in sorted(cache.items())
+    ]
+    payload = {
+        'start_url': start_url,
+        'saved_count': len(pages),
+        'pages': pages,
+    }
+    with open(cache_path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
 def save_site_html(
     url: str,
     outdir: Path,
@@ -479,6 +544,7 @@ def save_site_html(
     discovered_pages = []
     failed = []
     failed_reasons = {}
+    html_cache = _load_html_cache(start_url, outdir)
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     unlimited_depth = max_depth < 0
     unlimited_pages = max_pages <= 0
@@ -494,33 +560,50 @@ def save_site_html(
             continue
         visited.add(current_url)
 
-        try:
-            html = fetch_html(
-                current_url,
-                renderer=renderer,
-                playwright_headless=playwright_headless,
-                playwright_wait_seconds=playwright_wait_seconds,
-            )
-        except Exception as exc:
-            _mark_failed(current_url, str(exc), failed, failed_reasons)
-            continue
+        html = ''
+        html_path = ''
+        cached_path = html_cache.get(current_url, '')
+        if cached_path:
+            try:
+                html = Path(cached_path).read_text(encoding='utf-8')
+                html_path = cached_path
+            except Exception:
+                html = ''
+                html_path = ''
+
+        if not html:
+            try:
+                html = fetch_html(
+                    current_url,
+                    renderer=renderer,
+                    playwright_headless=playwright_headless,
+                    playwright_wait_seconds=playwright_wait_seconds,
+                )
+            except Exception as exc:
+                _mark_failed(current_url, str(exc), failed, failed_reasons)
+                continue
 
         if not _is_html_document(html):
             _mark_failed(current_url, 'non_html_document', failed, failed_reasons)
             continue
 
-        page_index = len(discovered_pages) + 1
-        try:
-            html_path = _save_html_snapshot(
-                current_url,
-                html,
-                outdir,
-                page_index=page_index,
-                timestamp=timestamp,
-            )
-        except Exception:
-            _mark_failed(current_url, 'html_save_error', failed, failed_reasons)
-            continue
+        if not html_path:
+            page_index = len(discovered_pages) + 1
+            try:
+                html_path = _save_html_snapshot(
+                    current_url,
+                    html,
+                    outdir,
+                    page_index=page_index,
+                    timestamp=timestamp,
+                )
+            except Exception:
+                _mark_failed(current_url, 'html_save_error', failed, failed_reasons)
+                continue
+
+            # Persist URL -> local HTML mapping after each new save.
+            html_cache[current_url] = html_path
+            _write_html_cache(start_url, outdir, html_cache)
 
         discovered_pages.append({'url': current_url, 'html_path': html_path})
 
