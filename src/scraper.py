@@ -33,6 +33,11 @@ IMAGE_FILE_RE = re.compile(r'\.(png|jpe?g|webp|gif|bmp|svg)(\?|$)', re.I)
 HTML_CONTENT_TYPE_RE = re.compile(r'text/html|application/xhtml\+xml', re.I)
 
 
+def _log(message: str):
+    now = datetime.now().strftime('%H:%M:%S')
+    print(f'[{now}] {message}')
+
+
 def _safe_name_from_url(url: str) -> str:
     p = urlparse(url)
     host = p.netloc.replace(':', '_')
@@ -329,12 +334,14 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
         raise RuntimeError('Playwright is not installed. Run: pip install playwright and playwright install chromium')
 
     with sync_playwright() as p:
+        _log(f'Playwright启动: {url}')
         browser = p.chromium.launch(headless=headless)
         context = browser.new_context(
             ignore_https_errors=True,
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         )
         page = context.new_page()
+        _log(f'开始打开页面: {url}')
         response = page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
         if response is not None:
             ctype = response.headers.get('content-type', '')
@@ -362,11 +369,19 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
 
         # Optional extra settle time for JS-heavy pages after body appears.
         if wait_seconds > 0:
+            _log(f'页面已可读取，额外等待{wait_seconds:.1f}秒: {url}')
             time.sleep(wait_seconds)
 
         html = page.content()
+        _log(f'HTML已抓取，准备关闭page: {url}')
+        page.close()
+        _log(f'page已关闭: {url}')
+        _log(f'准备关闭context: {url}')
         context.close()
+        _log(f'context已关闭: {url}')
+        _log(f'准备关闭browser: {url}')
         browser.close()
+        _log(f'浏览器已关闭: {url}')
     return html
 
 
@@ -587,10 +602,9 @@ def save_site_html(
             _mark_failed(current_url, 'non_html_document', failed, failed_reasons)
             continue
 
-        print(f"已抓取: {html_path}: {current_url}")
         if not html_path:
             page_index = len(html_cache) + 1
-            print(f"正在保存 HTML: {current_url} (深度 {depth}, 页面索引 {page_index})")
+            _log(f"正在保存 HTML: {current_url} (深度 {depth}, 页面索引 {page_index})")
             try:
                 html_path = _save_html_snapshot(
                     current_url,
