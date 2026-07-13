@@ -375,11 +375,7 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
         html = page.content()
         _log(f'HTML已抓取，准备关闭page: {url}')
         page.close()
-        _log(f'page已关闭: {url}')
-        _log(f'准备关闭context: {url}')
         context.close()
-        _log(f'context已关闭: {url}')
-        _log(f'准备关闭browser: {url}')
         browser.close()
         _log(f'浏览器已关闭: {url}')
     return html
