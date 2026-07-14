@@ -38,6 +38,7 @@ def _add_shared_fetch_args(parser):
     parser.add_argument('--headed', action='store_true', help='Run Playwright with visible browser window')
     parser.add_argument('--wait-seconds', type=float, default=5.0, help='Extra wait time after page load in Playwright mode')
     parser.add_argument('--cdp-url', default='', help='Connect to an existing Chrome via CDP (e.g. http://127.0.0.1:9222)')
+    parser.add_argument('--concurrency', type=int, default=1, help='Concurrent pages to fetch per crawl batch')
 
 
 def _resolve_depth_and_pages(args):
@@ -82,6 +83,7 @@ def main():
             outdir,
             max_depth=max_depth,
             max_pages=max_pages,
+            max_concurrency=max(args.concurrency, 1),
             renderer=args.renderer,
             playwright_headless=not args.headed,
             playwright_wait_seconds=max(args.wait_seconds, 0.0),
@@ -101,6 +103,7 @@ def main():
         outdir,
         max_depth=max_depth,
         max_pages=max_pages,
+        max_concurrency=max(args.concurrency, 1),
         renderer=args.renderer,
         playwright_headless=not args.headed,
         playwright_wait_seconds=max(args.wait_seconds, 0.0),

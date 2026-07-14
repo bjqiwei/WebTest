@@ -3,6 +3,7 @@ import re
 from datetime import datetime
 import hashlib
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
 from urllib.parse import urldefrag, urljoin, urlparse, unquote
@@ -696,6 +697,7 @@ def save_site_html(
     outdir: Path,
     max_depth: int = 0,
     max_pages: int = 20,
+    max_concurrency: int = 1,
     renderer: str = 'auto',
     playwright_headless: bool = True,
     playwright_wait_seconds: float = 5.0,
@@ -711,82 +713,26 @@ def save_site_html(
     root_host = urlparse(start_url).netloc
     visited = set()
     queue = deque([(start_url, 0)])
+    queued = {start_url}
     failed_pages = _load_failed_pages(start_url, outdir)
     html_cache = _load_html_cache(start_url, outdir)
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     unlimited_depth = max_depth < 0
     unlimited_pages = max_pages <= 0
+    max_concurrency = max(1, int(max_concurrency))
 
-    if callable(phase_callback):
-        phase_callback('saving_html')
-
-    while queue and (unlimited_pages or len(html_cache) < max_pages):
-        current_url, depth = queue.popleft()
-        if current_url in visited:
-            continue
-        if not re.search(r'\.html?$', urlparse(current_url).path, re.IGNORECASE) and '.' in Path(urlparse(current_url).path).suffix:
-            continue
-        visited.add(current_url)
-
-        html = ''
-        html_path = ''
-        cached_path = ''
+    def _cached_entry_for(page_url: str):
         for item in html_cache:
-            if item.get('url') == current_url:
-                cached_path = item.get('html_path', '')
-                break
-        if cached_path:
-            try:
-                html = Path(cached_path).read_text(encoding='utf-8')
-                html_path = cached_path
-            except Exception:
-                html = ''
-                html_path = ''
+            if item.get('url') == page_url:
+                return item
+        return None
 
-        if not html:
-            try:
-                html = fetch_html(
-                    current_url,
-                    renderer=renderer,
-                    playwright_headless=playwright_headless,
-                    playwright_wait_seconds=playwright_wait_seconds,
-                    playwright_cdp_url=playwright_cdp_url,
-                )
-            except Exception as exc:
-                reason = str(exc)
-                failed_html_path = ''
-                failed_html = (
-                    '<!doctype html><html><head><meta charset="utf-8"></head><body>'
-                    f'<h1>fetch_failed</h1><p>{reason}</p>'
-                    '</body></html>'
-                )
-                try:
-                    failed_html_path = _save_html_snapshot(
-                        current_url,
-                        failed_html,
-                        _failed_dir(outdir),
-                        page_index=len(failed_pages) + 1,
-                        timestamp=timestamp,
-                    )
-                except Exception:
-                    failed_html_path = ''
-                failed_pages.append(
-                    {
-                        'index': len(failed_pages) + 1,
-                        'url': current_url,
-                        'reason': reason,
-                        'html_path': failed_html_path,
-                    }
-                )
-                _write_failed_pages_manifest(start_url, outdir, failed_pages)
-                continue
-
-        if not _is_html_document(html) or _is_challenge_or_block_page(html):
-            reason = 'non_html_document' if not _is_html_document(html) else 'challenge_or_block'
-            failed_html_path = ''
+    def _append_failed(page_url: str, reason: str, html: str = ''):
+        failed_html_path = ''
+        if html:
             try:
                 failed_html_path = _save_html_snapshot(
-                    current_url,
+                    page_url,
                     html,
                     _failed_dir(outdir),
                     page_index=len(failed_pages) + 1,
@@ -794,46 +740,150 @@ def save_site_html(
                 )
             except Exception:
                 failed_html_path = ''
-            failed_pages.append(
-                {
-                    'index': len(failed_pages) + 1,
-                    'url': current_url,
-                    'reason': reason,
-                    'html_path': failed_html_path,
-                }
+        failed_pages.append(
+            {
+                'index': len(failed_pages) + 1,
+                'url': page_url,
+                'reason': reason,
+                'html_path': failed_html_path,
+            }
+        )
+        _write_failed_pages_manifest(start_url, outdir, failed_pages)
+
+    def _fetch_one(item):
+        page_url, _depth = item
+        try:
+            html_text = fetch_html(
+                page_url,
+                renderer=renderer,
+                playwright_headless=playwright_headless,
+                playwright_wait_seconds=playwright_wait_seconds,
+                playwright_cdp_url=playwright_cdp_url,
             )
-            _write_failed_pages_manifest(start_url, outdir, failed_pages)
+            return {
+                'url': page_url,
+                'html': html_text,
+                'html_path': '',
+                'error': '',
+            }
+        except Exception as exc:
+            return {
+                'url': page_url,
+                'html': '',
+                'html_path': '',
+                'error': str(exc),
+            }
+
+    if callable(phase_callback):
+        phase_callback('saving_html')
+
+    while queue and (unlimited_pages or len(html_cache) < max_pages):
+        if unlimited_pages:
+            per_round = min(max_concurrency, len(queue))
+        else:
+            remaining = max_pages - len(html_cache)
+            if remaining <= 0:
+                break
+            per_round = min(max_concurrency, len(queue), remaining)
+
+        batch = []
+        while queue and len(batch) < per_round:
+            current_url, depth = queue.popleft()
+            queued.discard(current_url)
+            if current_url in visited:
+                continue
+            if not re.search(r'\.html?$', urlparse(current_url).path, re.IGNORECASE) and '.' in Path(urlparse(current_url).path).suffix:
+                continue
+            visited.add(current_url)
+            batch.append((current_url, depth))
+
+        if not batch:
             continue
 
-        if not html_path:
-            page_index = len(html_cache) + 1
-            _log(f"正在保存 HTML: {current_url} (深度 {depth}, 页面索引 {page_index})")
-            try:
-                html_path = _save_html_snapshot(
-                    current_url,
-                    html,
-                    outdir,
-                    page_index=page_index,
-                    timestamp=timestamp,
-                )
-            except Exception:
+        result_by_url = {}
+        to_fetch = []
+        for current_url, _depth in batch:
+            html = ''
+            html_path = ''
+            cached = _cached_entry_for(current_url)
+            cached_path = cached.get('html_path', '') if cached else ''
+            if cached_path:
+                try:
+                    html = Path(cached_path).read_text(encoding='utf-8')
+                    html_path = cached_path
+                except Exception:
+                    html = ''
+                    html_path = ''
+
+            if html:
+                result_by_url[current_url] = {
+                    'url': current_url,
+                    'html': html,
+                    'html_path': html_path,
+                    'error': '',
+                }
+            else:
+                to_fetch.append((current_url, _depth))
+
+        if to_fetch:
+            worker_count = min(max_concurrency, len(to_fetch))
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                fetched_results = list(executor.map(_fetch_one, to_fetch))
+            for item in fetched_results:
+                result_by_url[item['url']] = item
+
+        for current_url, depth in batch:
+            item = result_by_url.get(current_url)
+            if not item:
                 continue
 
-            # Persist URL -> local HTML mapping after each new save.
-            html_cache.append({'url': current_url, 'html_path': html_path})
-            _write_html_cache(start_url, outdir, html_cache)
+            html = item.get('html', '')
+            html_path = item.get('html_path', '')
+            fetch_error = item.get('error', '')
 
-        if not unlimited_depth and depth >= max_depth:
-            continue
+            if fetch_error:
+                failed_html = (
+                    '<!doctype html><html><head><meta charset="utf-8"></head><body>'
+                    f'<h1>fetch_failed</h1><p>{fetch_error}</p>'
+                    '</body></html>'
+                )
+                _append_failed(current_url, fetch_error, failed_html)
+                continue
 
-        try:
-            links = _extract_links(html, current_url, root_host)
-        except Exception:
-            links = []
+            if not _is_html_document(html) or _is_challenge_or_block_page(html):
+                reason = 'non_html_document' if not _is_html_document(html) else 'challenge_or_block'
+                _append_failed(current_url, reason, html)
+                continue
 
-        for link in links:
-            if link not in visited:
-                queue.append((link, depth + 1))
+            if not html_path:
+                page_index = len(html_cache) + 1
+                _log(f"正在保存 HTML: {current_url} (深度 {depth}, 页面索引 {page_index})")
+                try:
+                    html_path = _save_html_snapshot(
+                        current_url,
+                        html,
+                        outdir,
+                        page_index=page_index,
+                        timestamp=timestamp,
+                    )
+                except Exception:
+                    continue
+
+                html_cache.append({'url': current_url, 'html_path': html_path})
+                _write_html_cache(start_url, outdir, html_cache)
+
+            if not unlimited_depth and depth >= max_depth:
+                continue
+
+            try:
+                links = _extract_links(html, current_url, root_host)
+            except Exception:
+                links = []
+
+            for link in links:
+                if link not in visited and link not in queued:
+                    queue.append((link, depth + 1))
+                    queued.add(link)
 
     _write_html_cache(start_url, outdir, html_cache)
     cache_path = _html_cache_path(start_url, outdir)
@@ -842,6 +892,7 @@ def save_site_html(
         'saved_count': len(html_cache),
         'pages': html_cache,
     }
+    result['failed_count'] = len(failed_pages)
     result['summary_path'] = str(cache_path)
     result['failed_pages_path'] = str(_failed_pages_path(start_url, outdir))
     return result
@@ -926,6 +977,7 @@ def scrape_site(
     outdir: Path,
     max_depth: int = 0,
     max_pages: int = 20,
+    max_concurrency: int = 1,
     renderer: str = 'auto',
     playwright_headless: bool = True,
     playwright_wait_seconds: float = 5.0,
@@ -938,6 +990,7 @@ def scrape_site(
         outdir,
         max_depth=max_depth,
         max_pages=max_pages,
+        max_concurrency=max_concurrency,
         renderer=renderer,
         playwright_headless=playwright_headless,
         playwright_wait_seconds=playwright_wait_seconds,
