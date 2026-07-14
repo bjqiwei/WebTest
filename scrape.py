@@ -90,6 +90,8 @@ def main():
         print(f'已保存HTML: {result["saved_count"]}个')
         print(f'失败数: {result.get("failed_count", 0)}')
         print(f'清单JSON: {result["summary_path"]}')
+        if result.get('failed_pages_path'):
+            print(f'失败页面JSON: {result["failed_pages_path"]}')
         return
 
     result = scrape_site(

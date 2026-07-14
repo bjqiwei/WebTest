@@ -236,6 +236,35 @@ def test_scrape_site_skip_parse_error_and_continue(tmp_path, monkeypatch):
     assert 'https://example.com/bad.html' in result['failed']
 
 
+def test_scrape_site_persists_failed_fetch_pages(tmp_path, monkeypatch):
+    pages = {
+      'https://example.com/': '<html><body><a href="/bad.html">bad</a><a href="/good.html">good</a></body></html>',
+      'https://example.com/good.html': '<html><body><main><p>ok</p></main></body></html>',
+    }
+
+    def fake_fetch(url, **kwargs):
+      if url.endswith('/bad.html'):
+        raise RuntimeError('network down')
+      return pages[url]
+
+    monkeypatch.setattr('src.scraper.fetch_html', fake_fetch)
+
+    result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
+
+    assert result['failed_count'] == 1
+    assert result.get('failed_pages_path')
+
+    failed_manifest = json.loads(Path(result['failed_pages_path']).read_text(encoding='utf-8'))
+    assert failed_manifest['failed_count'] == 1
+    failed_item = failed_manifest['failed_pages'][0]
+    assert failed_item['url'] == 'https://example.com/bad.html'
+    assert failed_item['index'] == 2
+
+    failed_json_name = Path(failed_item['failed_json_path']).name
+    assert failed_json_name.startswith('0002_bad_html_')
+    assert failed_json_name.endswith('_failed.json')
+
+
 def test_fetch_html_auto_fallback_to_playwright(monkeypatch):
     class DummyResp:
         status_code = 200

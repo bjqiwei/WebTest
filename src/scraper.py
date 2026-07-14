@@ -314,12 +314,6 @@ def _extract_links(html: str, base_url: str, root_host: str):
     return links
 
 
-def _mark_failed(url: str, reason: str, failed: list, failed_reasons: dict):
-    if url not in failed_reasons:
-        failed.append(url)
-    failed_reasons[url] = reason
-
-
 def extract_videos(html: str, base_url: str):
     soup = BeautifulSoup(html, 'html.parser')
     return _extract_video_items(soup, base_url)
@@ -578,20 +572,56 @@ def _save_page_output(url: str, html: str, outdir: Path, page_index: int, timest
     }
 
 
-def _write_html_manifest(start_url: str, outdir: Path, timestamp: str, pages: list, failed: list, failed_reasons: dict):
+def _write_html_manifest(start_url: str, outdir: Path, timestamp: str, pages: list):
     manifest_path = outdir / f"{_safe_name_from_url(start_url)}_html_manifest_{timestamp}.json"
     payload = {
         'start_url': start_url,
         'saved_count': len(pages),
-        'failed_count': len(failed),
-        'failed': failed,
-        'failed_reasons': failed_reasons,
         'pages': pages,
     }
     with open(manifest_path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     payload['summary_path'] = str(manifest_path)
     return payload
+
+
+def _failed_dir(outdir: Path) -> Path:
+    return outdir / 'failed'
+
+
+def _failed_pages_path(start_url: str, outdir: Path) -> Path:
+    return _failed_dir(outdir) / f"{_safe_name_from_url(start_url)}_failed_pages.json"
+
+
+def _load_failed_pages(start_url: str, outdir: Path):
+    failed_manifest_path = _failed_pages_path(start_url, outdir)
+    if not failed_manifest_path.exists():
+        legacy_manifest_path = outdir / f"{_safe_name_from_url(start_url)}_failed_pages.json"
+        failed_manifest_path = legacy_manifest_path if legacy_manifest_path.exists() else failed_manifest_path
+    if not failed_manifest_path.exists():
+        return []
+
+    try:
+        with open(failed_manifest_path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+    except Exception:
+        return []
+
+    items = payload.get('failed_pages', []) if isinstance(payload, dict) else []
+    return items if isinstance(items, list) else []
+
+
+def _write_failed_pages_manifest(start_url: str, outdir: Path, failed_pages: list):
+    failed_manifest_path = _failed_pages_path(start_url, outdir)
+    failed_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'start_url': start_url,
+        'failed_count': len(failed_pages),
+        'failed_pages': failed_pages,
+    }
+    with open(failed_manifest_path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return str(failed_manifest_path)
 
 
 def _html_cache_path(start_url: str, outdir: Path) -> Path:
@@ -650,11 +680,11 @@ def save_site_html(
         raise ValueError('Only http/https URLs are supported.')
 
     outdir.mkdir(parents=True, exist_ok=True)
+    _failed_dir(outdir).mkdir(parents=True, exist_ok=True)
     root_host = urlparse(start_url).netloc
     visited = set()
     queue = deque([(start_url, 0)])
-    failed = []
-    failed_reasons = {}
+    failed_pages = _load_failed_pages(start_url, outdir)
     html_cache = _load_html_cache(start_url, outdir)
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     unlimited_depth = max_depth < 0
@@ -695,11 +725,56 @@ def save_site_html(
                     playwright_wait_seconds=playwright_wait_seconds,
                 )
             except Exception as exc:
-                _mark_failed(current_url, str(exc), failed, failed_reasons)
+                reason = str(exc)
+                failed_html_path = ''
+                failed_html = (
+                    '<!doctype html><html><head><meta charset="utf-8"></head><body>'
+                    f'<h1>fetch_failed</h1><p>{reason}</p>'
+                    '</body></html>'
+                )
+                try:
+                    failed_html_path = _save_html_snapshot(
+                        current_url,
+                        failed_html,
+                        _failed_dir(outdir),
+                        page_index=len(failed_pages) + 1,
+                        timestamp=timestamp,
+                    )
+                except Exception:
+                    failed_html_path = ''
+                failed_pages.append(
+                    {
+                        'index': len(failed_pages) + 1,
+                        'url': current_url,
+                        'reason': reason,
+                        'html_path': failed_html_path,
+                    }
+                )
+                _write_failed_pages_manifest(start_url, outdir, failed_pages)
                 continue
 
         if not _is_html_document(html):
-            _mark_failed(current_url, 'non_html_document', failed, failed_reasons)
+            reason = 'non_html_document'
+            failed_html_path = ''
+            try:
+                failed_html_path = _save_html_snapshot(
+                    current_url,
+                    html,
+                    _failed_dir(outdir),
+                    page_index=len(failed_pages) + 1,
+                    timestamp=timestamp,
+                )
+            except Exception:
+                failed_html_path = ''
+            failed_pages.append(
+                {
+                    'index': len(failed_pages) + 1,
+                    'url': current_url,
+                    'reason': reason,
+                    'html_path': failed_html_path,
+                }
+            )
+            _write_failed_pages_manifest(start_url, outdir, failed_pages)
             continue
 
         if not html_path:
@@ -714,7 +789,15 @@ def save_site_html(
                     timestamp=timestamp,
                 )
             except Exception:
-                _mark_failed(current_url, 'html_save_error', failed, failed_reasons)
+                failed_pages.append(
+                    {
+                        'index': len(failed_pages) + 1,
+                        'url': current_url,
+                        'reason': 'html_save_error',
+                        'html_path': '',
+                    }
+                )
+                _write_failed_pages_manifest(start_url, outdir, failed_pages)
                 continue
 
             # Persist URL -> local HTML mapping after each new save.
@@ -727,14 +810,15 @@ def save_site_html(
         try:
             links = _extract_links(html, current_url, root_host)
         except Exception:
-            _mark_failed(current_url, 'link_extract_error', failed, failed_reasons)
             links = []
 
         for link in links:
             if link not in visited:
                 queue.append((link, depth + 1))
 
-    return _write_html_manifest(start_url, outdir, timestamp, html_cache, failed, failed_reasons)
+    result = _write_html_manifest(start_url, outdir, timestamp, html_cache)
+    result['failed_pages_path'] = _write_failed_pages_manifest(start_url, outdir, failed_pages)
+    return result
 
 
 def analyze_saved_html(manifest_path: Path, progress_callback=None, phase_callback=None):
@@ -743,8 +827,8 @@ def analyze_saved_html(manifest_path: Path, progress_callback=None, phase_callba
         manifest = json.load(f)
 
     pages = []
-    failed = []
-    failed_reasons = {}
+    analysis_failed = []
+    analysis_failed_reasons = {}
     total_videos = 0
     total_media = 0
     manifest_pages = manifest.get('pages', [])
@@ -762,7 +846,9 @@ def analyze_saved_html(manifest_path: Path, progress_callback=None, phase_callba
         try:
             html = html_path.read_text(encoding='utf-8')
         except Exception:
-            _mark_failed(current_url, 'html_read_error', failed, failed_reasons)
+            if current_url not in analysis_failed_reasons:
+                analysis_failed.append(current_url)
+            analysis_failed_reasons[current_url] = 'html_read_error'
             continue
 
         try:
@@ -774,7 +860,9 @@ def analyze_saved_html(manifest_path: Path, progress_callback=None, phase_callba
                 html_path.stem.rsplit('_html_', 1)[-1],
             )
         except Exception:
-            _mark_failed(current_url, 'parse_or_save_error', failed, failed_reasons)
+            if current_url not in analysis_failed_reasons:
+                analysis_failed.append(current_url)
+            analysis_failed_reasons[current_url] = 'parse_or_save_error'
             continue
 
         total_videos += page_data['video_count']
@@ -795,9 +883,9 @@ def analyze_saved_html(manifest_path: Path, progress_callback=None, phase_callba
         'page_count': len(pages),
         'video_count': total_videos,
         'media_count': total_media,
-        'failed_count': len(failed),
-        'failed': failed,
-        'failed_reasons': failed_reasons,
+        'failed_count': len(analysis_failed),
+        'failed': analysis_failed,
+        'failed_reasons': analysis_failed_reasons,
         'pages': pages,
     }
     summary_path = manifest_path.parent / f"{_safe_name_from_url(manifest['start_url'])}_summary.json"
@@ -833,11 +921,6 @@ def scrape_site(
         progress_callback=progress_callback,
         phase_callback=phase_callback,
     )
-    for failed_url in save_result.get('failed', []):
-        if failed_url not in summary['failed_reasons']:
-            summary['failed'].append(failed_url)
-            summary['failed_reasons'][failed_url] = save_result['failed_reasons'][failed_url]
-    summary['failed_count'] = len(summary['failed'])
     return summary
 
 
