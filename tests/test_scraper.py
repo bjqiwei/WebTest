@@ -73,6 +73,21 @@ def test_scrape_url_outputs_counter_and_json(tmp_path, monkeypatch):
     assert media_items[0]['type'] == 'video'
 
 
+def test_scrape_url_decodes_output_filename(tmp_path, monkeypatch):
+    sample_html = '<html><body><main><p>ok content</p></main></body></html>'
+
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: sample_html)
+
+    result = scrape_url('https://example.com/hello%20world', tmp_path)
+    output_name = Path(result['json_path']).name
+
+    assert 'hello world' in output_name
+
+
+def test_safe_name_root_url_has_single_index():
+    assert scraper_module._safe_name_from_url('https://www.unicef.org/') == 'www.unicef.org_index'
+
+
 def test_extract_content_blocks_with_image_and_video():
     html = '''
     <html>

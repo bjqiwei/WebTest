@@ -5,7 +5,7 @@ import hashlib
 from collections import deque
 from pathlib import Path
 import time
-from urllib.parse import urldefrag, urljoin, urlparse
+from urllib.parse import urldefrag, urljoin, urlparse, unquote
 
 import requests
 from bs4 import BeautifulSoup, NavigableString, Tag
@@ -46,8 +46,9 @@ def _log(message: str):
 def _safe_name_from_url(url: str) -> str:
     p = urlparse(url)
     host = p.netloc.replace(':', '_')
-    path = (p.path.strip('/').replace('/', '_') or 'index')
-    query = re.sub(r'[^a-zA-Z0-9]+', '_', p.query).strip('_')
+    path = _sanitize_filename_component(unquote(p.path.strip('/').replace('/', '_')) or 'index')
+    raw_query = unquote(re.sub(r'[^a-zA-Z0-9]+', '_', p.query).strip('_'))
+    query = _sanitize_filename_component(raw_query) if raw_query else ''
     if query:
         return f"{host}_{path}_{query}"
     return f"{host}_{path}"
@@ -55,11 +56,19 @@ def _safe_name_from_url(url: str) -> str:
 
 def _path_name_from_url(url: str) -> str:
     p = urlparse(url)
-    path = (p.path.strip('/').replace('/', '_') or 'index')
-    query = re.sub(r'[^a-zA-Z0-9]+', '_', p.query).strip('_')
+    path = _sanitize_filename_component(unquote(p.path.strip('/').replace('/', '_')) or 'index')
+    raw_query = unquote(re.sub(r'[^a-zA-Z0-9]+', '_', p.query).strip('_'))
+    query = _sanitize_filename_component(raw_query) if raw_query else ''
     if query:
         return f"{path}_{query}"
     return path
+
+
+def _sanitize_filename_component(value: str) -> str:
+    # Replace characters that are invalid in Windows filenames.
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', value)
+    cleaned = cleaned.strip(' .')
+    return cleaned or 'index'
 
 
 def _build_output_base_name(url: str, page_index: int, timestamp: str) -> str:
