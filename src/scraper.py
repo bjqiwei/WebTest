@@ -21,11 +21,10 @@ NOISE_PARENT_TAGS = {
     'header',
     'footer',
     'aside',
-    'form',
     'noscript',
 }
 
-NOISE_KEYWORDS = ('nav', 'footer', 'cookie', 'consent', 'breadcrumb', 'share', 'related')
+NOISE_KEYWORDS = ('footer', 'cookie', 'consent', 'breadcrumb', 'share', 'related')
 
 VIDEO_FILE_RE = re.compile(r'\.(mp4|m3u8|webm|ogg)(\?|$)', re.I)
 EMBED_RE = re.compile(r'youtube|youtu\.be|vimeo|player|wistia', re.I)
@@ -46,29 +45,37 @@ def _log(message: str):
 def _safe_name_from_url(url: str) -> str:
     p = urlparse(url)
     host = p.netloc.replace(':', '_')
-    path = _sanitize_filename_component(unquote(p.path.strip('/').replace('/', '_')) or 'index')
+    path = _sanitize_filename_component(unquote(p.path.strip('/').replace('/', '_')) or '')
     raw_query = unquote(re.sub(r'[^a-zA-Z0-9]+', '_', p.query).strip('_'))
     query = _sanitize_filename_component(raw_query) if raw_query else ''
-    if query:
+    if path and query:
         return f"{host}_{path}_{query}"
-    return f"{host}_{path}"
+    if path:
+        return f"{host}_{path}"
+    if query:
+        return f"{host}_{query}"
+    return host
 
 
 def _path_name_from_url(url: str) -> str:
     p = urlparse(url)
-    path = _sanitize_filename_component(unquote(p.path.strip('/').replace('/', '_')) or 'index')
+    path = _sanitize_filename_component(unquote(p.path.strip('/').replace('/', '_')) or '')
     raw_query = unquote(re.sub(r'[^a-zA-Z0-9]+', '_', p.query).strip('_'))
     query = _sanitize_filename_component(raw_query) if raw_query else ''
-    if query:
+    if path and query:
         return f"{path}_{query}"
-    return path
+    if path:
+        return path
+    if query:
+        return query
+    return 'index'
 
 
 def _sanitize_filename_component(value: str) -> str:
     # Replace characters that are invalid in Windows filenames.
     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', value)
     cleaned = cleaned.strip(' .')
-    return cleaned or 'index'
+    return cleaned or ''
 
 
 def _build_output_base_name(url: str, page_index: int, timestamp: str) -> str:
@@ -569,19 +576,6 @@ def _save_page_output(url: str, html: str, outdir: Path, page_index: int, timest
     }
 
 
-def _write_html_manifest(start_url: str, outdir: Path, timestamp: str, pages: list):
-    manifest_path = outdir / f"{_safe_name_from_url(start_url)}_html_manifest_{timestamp}.json"
-    payload = {
-        'start_url': start_url,
-        'saved_count': len(pages),
-        'pages': pages,
-    }
-    with open(manifest_path, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    payload['summary_path'] = str(manifest_path)
-    return payload
-
-
 def _failed_dir(outdir: Path) -> Path:
     return outdir / 'failed'
 
@@ -591,15 +585,15 @@ def _failed_pages_path(start_url: str, outdir: Path) -> Path:
 
 
 def _load_failed_pages(start_url: str, outdir: Path):
-    failed_manifest_path = _failed_pages_path(start_url, outdir)
-    if not failed_manifest_path.exists():
-        legacy_manifest_path = outdir / f"{_safe_name_from_url(start_url)}_failed_pages.json"
-        failed_manifest_path = legacy_manifest_path if legacy_manifest_path.exists() else failed_manifest_path
-    if not failed_manifest_path.exists():
+    failed_path = _failed_pages_path(start_url, outdir)
+    if not failed_path.exists():
+        legacy_path = outdir / f"{_safe_name_from_url(start_url)}_failed_pages.json"
+        failed_path = legacy_path if legacy_path.exists() else failed_path
+    if not failed_path.exists():
         return []
 
     try:
-        with open(failed_manifest_path, 'r', encoding='utf-8') as f:
+        with open(failed_path, 'r', encoding='utf-8') as f:
             payload = json.load(f)
     except Exception:
         return []
@@ -609,20 +603,20 @@ def _load_failed_pages(start_url: str, outdir: Path):
 
 
 def _write_failed_pages_manifest(start_url: str, outdir: Path, failed_pages: list):
-    failed_manifest_path = _failed_pages_path(start_url, outdir)
-    failed_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    failed_path = _failed_pages_path(start_url, outdir)
+    failed_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         'start_url': start_url,
         'failed_count': len(failed_pages),
         'failed_pages': failed_pages,
     }
-    with open(failed_manifest_path, 'w', encoding='utf-8') as f:
+    with open(failed_path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
-    return str(failed_manifest_path)
+    return str(failed_path)
 
 
 def _html_cache_path(start_url: str, outdir: Path) -> Path:
-    return outdir / f"{_safe_name_from_url(start_url)}_html_cache.json"
+    return outdir / f"{_safe_name_from_url(start_url)}_cache.json"
 
 
 def _load_html_cache(start_url: str, outdir: Path):
@@ -804,8 +798,15 @@ def save_site_html(
             if link not in visited:
                 queue.append((link, depth + 1))
 
-    result = _write_html_manifest(start_url, outdir, timestamp, html_cache)
-    result['failed_pages_path'] = _write_failed_pages_manifest(start_url, outdir, failed_pages)
+    _write_html_cache(start_url, outdir, html_cache)
+    cache_path = _html_cache_path(start_url, outdir)
+    result = {
+        'start_url': start_url,
+        'saved_count': len(html_cache),
+        'pages': html_cache,
+    }
+    result['summary_path'] = str(cache_path)
+    result['failed_pages_path'] = str(_failed_pages_path(start_url, outdir))
     return result
 
 

@@ -137,6 +137,43 @@ def test_extract_content_blocks_excludes_related_section():
     assert 'Related article' not in blocks
 
 
+def test_extract_content_blocks_not_blocked_by_body_navigation_class():
+    html = '''
+    <html>
+      <body class="secondary-navigation-dropdown-style-black-outlined">
+        <main>
+          <h1>UNICEF headline</h1>
+          <p>Children first content.</p>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://www.unicef.org/')
+    assert 'UNICEF headline' in blocks
+    assert 'Children first content.' in blocks
+
+
+def test_extract_content_blocks_allows_images_inside_form():
+    html = '''
+    <html>
+      <body>
+        <main>
+          <form>
+            <img src="/inside-form.webp" alt="Inside form" />
+          </form>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com')
+    media_items = [b for b in blocks if isinstance(b, dict)]
+    assert len(media_items) == 1
+    assert media_items[0]['type'] == 'image'
+    assert media_items[0]['original_url'] == 'https://example.com/inside-form.webp'
+
+
 def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
     pages = {
         'https://example.com/': '''
@@ -172,7 +209,7 @@ def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
     assert first['url'] == 'https://example.com/'
     assert second['url'] == 'https://example.com/careers.html'
 
-    summary = json.loads((tmp_path / 'example.com_index_summary.json').read_text(encoding='utf-8'))
+    summary = json.loads((tmp_path / 'example.com_summary.json').read_text(encoding='utf-8'))
     assert summary['page_count'] == 2
     assert summary['video_count'] == 2
     assert summary['media_count'] == 2
