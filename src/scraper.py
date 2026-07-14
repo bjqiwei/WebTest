@@ -333,19 +333,24 @@ def _is_html_document(html: str) -> bool:
 
 def _is_challenge_or_block_page(html: str) -> bool:
     sample = (html or '')[:6000].lower()
-    markers = (
+    strong_markers = (
         'just a moment',
         'cf-browser-verification',
         'attention required',
         'checking your browser',
         '/cdn-cgi/challenge-platform',
+        'challenges.cloudflare.com',
+        '__cf_chl_',
+        'cf-chl-',
+        'turnstile',
         'enable javascript and cookies',
         '正在进行安全验证',
         '请验证您是真人',
         '安全服务防护恶意自动程序',
-        'cloudflare',
     )
-    return any(m in sample for m in markers)
+    # Do not treat generic "cloudflare" mentions as challenge pages;
+    # many normal sites include Cloudflare assets and would be false positives.
+    return any(m in sample for m in strong_markers)
 
 
 def _try_click_challenge_checkbox(page) -> bool:
@@ -399,17 +404,32 @@ def _try_click_challenge_checkbox(page) -> bool:
     return False
 
 
-def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, headless: bool = True) -> str:
+def fetch_html_with_playwright(
+    url: str,
+    timeout=30,
+    wait_seconds: float = 5.0,
+    headless: bool = True,
+    cdp_url: str = '',
+) -> str:
     if sync_playwright is None:
         raise RuntimeError('Playwright is not installed. Run: pip install playwright and playwright install chromium')
 
     with sync_playwright() as p:
         _log(f'Playwright启动: {url}')
-        browser = p.chromium.launch(headless=headless)
-        context = browser.new_context(
-            ignore_https_errors=True,
-            user_agent=DEFAULT_USER_AGENT,
-        )
+        use_cdp = bool(cdp_url)
+        if use_cdp:
+            _log(f'通过CDP连接Chrome: {cdp_url}')
+            browser = p.chromium.connect_over_cdp(cdp_url)
+            if browser.contexts:
+                context = browser.contexts[0]
+            else:
+                context = browser.new_context(ignore_https_errors=True, user_agent=DEFAULT_USER_AGENT)
+        else:
+            browser = p.chromium.launch(headless=headless)
+            context = browser.new_context(
+                ignore_https_errors=True,
+                user_agent=DEFAULT_USER_AGENT,
+            )
         page = context.new_page()
         _log(f'开始打开页面: {url}')
         response = page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
@@ -463,7 +483,12 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
             return page.content()
 
         html = _capture_current_page_html()
-        if (not _is_html_document(html)) or _is_challenge_or_block_page(html):
+        html_is_document = _is_html_document(html)
+        html_is_challenge = _is_challenge_or_block_page(html)
+
+        # Avoid forced reload when challenge is still on screen. Reloading often
+        # resets a manually completed challenge and triggers a new one.
+        if not html_is_document:
             if time.time() < body_deadline:
                 _log(f'读取HTML未成功，刷新后重试一次: {url}')
                 try:
@@ -481,11 +506,17 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
                     _log(f'刷新重试失败，继续使用首次读取结果: {url} -> {exc}')
             else:
                 _log(f'读取HTML超时，继续使用首次读取结果: {url}')
+        elif html_is_challenge:
+            _log(f'挑战页仍未通过，不执行自动刷新以避免触发新一轮验证: {url}')
         _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
         page.close()
-        context.close()
-        browser.close()
-        _log(f'浏览器已关闭: {url}')
+        if use_cdp:
+            browser.close()
+            _log(f'CDP连接已断开: {url}')
+        else:
+            context.close()
+            browser.close()
+            _log(f'浏览器已关闭: {url}')
     return html
 
 
@@ -495,6 +526,7 @@ def fetch_html(
     renderer: str = 'auto',
     playwright_headless: bool = True,
     playwright_wait_seconds: float = 5.0,
+    playwright_cdp_url: str = '',
 ) -> str:
     headers = {
         'User-Agent': DEFAULT_USER_AGENT
@@ -505,6 +537,7 @@ def fetch_html(
             timeout=max(timeout, 60),
             headless=playwright_headless,
             wait_seconds=playwright_wait_seconds,
+            cdp_url=playwright_cdp_url,
         )
         return html
 
@@ -526,6 +559,7 @@ def fetch_html(
                 timeout=max(timeout, 60),
                 headless=playwright_headless,
                 wait_seconds=playwright_wait_seconds,
+                cdp_url=playwright_cdp_url,
             )
             return html
         raise
@@ -536,6 +570,7 @@ def fetch_html(
             timeout=max(timeout, 60),
             headless=playwright_headless,
             wait_seconds=playwright_wait_seconds,
+            cdp_url=playwright_cdp_url,
         )
 
     return html
@@ -664,6 +699,7 @@ def save_site_html(
     renderer: str = 'auto',
     playwright_headless: bool = True,
     playwright_wait_seconds: float = 5.0,
+    playwright_cdp_url: str = '',
     phase_callback=None,
 ):
     start_url = _normalize_url(url)
@@ -714,6 +750,7 @@ def save_site_html(
                     renderer=renderer,
                     playwright_headless=playwright_headless,
                     playwright_wait_seconds=playwright_wait_seconds,
+                    playwright_cdp_url=playwright_cdp_url,
                 )
             except Exception as exc:
                 reason = str(exc)
@@ -892,6 +929,7 @@ def scrape_site(
     renderer: str = 'auto',
     playwright_headless: bool = True,
     playwright_wait_seconds: float = 5.0,
+    playwright_cdp_url: str = '',
     progress_callback=None,
     phase_callback=None,
 ):
@@ -903,6 +941,7 @@ def scrape_site(
         renderer=renderer,
         playwright_headless=playwright_headless,
         playwright_wait_seconds=playwright_wait_seconds,
+        playwright_cdp_url=playwright_cdp_url,
         phase_callback=phase_callback,
     )
     summary = analyze_saved_html(

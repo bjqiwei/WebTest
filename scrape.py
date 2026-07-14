@@ -37,6 +37,7 @@ def _add_shared_fetch_args(parser):
     parser.add_argument('--renderer', choices=['auto', 'requests', 'playwright'], default='auto', help='Page rendering mode')
     parser.add_argument('--headed', action='store_true', help='Run Playwright with visible browser window')
     parser.add_argument('--wait-seconds', type=float, default=5.0, help='Extra wait time after page load in Playwright mode')
+    parser.add_argument('--cdp-url', default='', help='Connect to an existing Chrome via CDP (e.g. http://127.0.0.1:9222)')
 
 
 def _resolve_depth_and_pages(args):
@@ -84,6 +85,7 @@ def main():
             renderer=args.renderer,
             playwright_headless=not args.headed,
             playwright_wait_seconds=max(args.wait_seconds, 0.0),
+            playwright_cdp_url=args.cdp_url.strip(),
             phase_callback=_phase,
         )
         print('保存完成')
@@ -102,6 +104,7 @@ def main():
         renderer=args.renderer,
         playwright_headless=not args.headed,
         playwright_wait_seconds=max(args.wait_seconds, 0.0),
+        playwright_cdp_url=args.cdp_url.strip(),
         progress_callback=_progress,
         phase_callback=_phase,
     )

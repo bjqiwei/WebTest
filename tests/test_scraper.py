@@ -320,6 +320,25 @@ def test_fetch_html_auto_fallback_to_playwright(monkeypatch):
     assert '<main>ok</main>' in html
 
 
+def test_challenge_detector_not_triggered_by_generic_cloudflare_text():
+    html = '''
+    <html><body>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+      <p>normal page</p>
+    </body></html>
+    '''
+    assert scraper_module._is_challenge_or_block_page(html) is False
+
+
+def test_challenge_detector_triggered_by_cloudflare_challenge_markers():
+    html = '''
+    <html><head><title>Just a moment...</title></head><body>
+      <script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"></script>
+    </body></html>
+    '''
+    assert scraper_module._is_challenge_or_block_page(html) is True
+
+
 def test_fetch_html_playwright_mode(monkeypatch):
     monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: '<html>pw</html>')
     html = fetch_html('https://example.com', renderer='playwright')
