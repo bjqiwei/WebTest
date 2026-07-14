@@ -416,9 +416,10 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
             # Some sites keep loading long-poll resources; proceed with timed readiness checks.
             pass
 
+        body_deadline = time.time() + max(float(timeout), 10.0)
+
         def _capture_current_page_html() -> str:
             current_html = page.content()
-            body_deadline = time.time() + max(float(timeout), 10.0)
 
             # Wait until document body becomes readable.
             while time.time() < body_deadline:
@@ -434,10 +435,6 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
 
             # 用户设置的额外等待应精确生效，不再隐式叠加额外秒数。
             settle_wait_seconds = max(float(wait_seconds), 0.0)
-            _log(f'页面已可读取，额外等待{settle_wait_seconds:.1f}秒: {url}')
-            if settle_wait_seconds > 0:
-                time.sleep(settle_wait_seconds)
-            current_html = page.content()
 
             # Only when a challenge page is detected do we wait longer for verification.
             if _is_challenge_or_block_page(current_html):
@@ -451,27 +448,33 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
                     current_html = page.content()
                     if not _is_challenge_or_block_page(current_html):
                         break
+            else:
+                _log(f'未检测到挑战页，额外等待{settle_wait_seconds:.1f}秒: {url}')
+                if settle_wait_seconds > 0:
+                    time.sleep(settle_wait_seconds)
 
             return page.content()
 
         html = _capture_current_page_html()
         if (not _is_html_document(html)) or _is_challenge_or_block_page(html):
-            _log(f'首次读取HTML未成功，刷新后重试一次: {url}')
-            try:
-                response = page.reload(wait_until='domcontentloaded', timeout=timeout * 1000)
-                if response is not None:
-                    ctype = response.headers.get('content-type', '')
-                    if ctype and not HTML_CONTENT_TYPE_RE.search(ctype):
-                        raise RuntimeError(f'Non-HTML content type: {ctype}')
+            if time.time() < body_deadline:
+                _log(f'读取HTML未成功，刷新后重试一次: {url}')
                 try:
-                    page.wait_for_load_state('load', timeout=timeout * 1000)
-                except Exception:
-                    pass
-                html = _capture_current_page_html()
-            except Exception as exc:
-                _log(f'刷新重试失败，继续使用首次读取结果: {url} -> {exc}')
-
-        _log(f'HTML已抓取，准备关闭page: {url}')
+                    response = page.reload(wait_until='domcontentloaded', timeout=timeout * 1000)
+                    if response is not None:
+                        ctype = response.headers.get('content-type', '')
+                        if ctype and not HTML_CONTENT_TYPE_RE.search(ctype):
+                            raise RuntimeError(f'Non-HTML content type: {ctype}')
+                    try:
+                        page.wait_for_load_state('load', timeout=timeout * 1000)
+                    except Exception:
+                        pass
+                    html = _capture_current_page_html()
+                except Exception as exc:
+                    _log(f'刷新重试失败，继续使用首次读取结果: {url} -> {exc}')
+            else:
+                _log(f'读取HTML超时，继续使用首次读取结果: {url}')
+        _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
         page.close()
         context.close()
         browser.close()
@@ -496,8 +499,6 @@ def fetch_html(
             headless=playwright_headless,
             wait_seconds=playwright_wait_seconds,
         )
-        if _is_challenge_or_block_page(html):
-            raise RuntimeError(f'Blocked by target site after Playwright rendering: {url}')
         return html
 
     try:
@@ -519,8 +520,6 @@ def fetch_html(
                 headless=playwright_headless,
                 wait_seconds=playwright_wait_seconds,
             )
-            if _is_challenge_or_block_page(html):
-                raise RuntimeError(f'Blocked by target site after Playwright rendering: {url}')
             return html
         raise
 
@@ -531,8 +530,6 @@ def fetch_html(
             headless=playwright_headless,
             wait_seconds=playwright_wait_seconds,
         )
-        if _is_challenge_or_block_page(html):
-            raise RuntimeError(f'Blocked by target site after Playwright rendering: {url}')
 
     return html
 
@@ -753,8 +750,8 @@ def save_site_html(
                 _write_failed_pages_manifest(start_url, outdir, failed_pages)
                 continue
 
-        if not _is_html_document(html):
-            reason = 'non_html_document'
+        if not _is_html_document(html) or _is_challenge_or_block_page(html):
+            reason = 'non_html_document' if not _is_html_document(html) else 'challenge_or_block'
             failed_html_path = ''
             try:
                 failed_html_path = _save_html_snapshot(
@@ -789,15 +786,6 @@ def save_site_html(
                     timestamp=timestamp,
                 )
             except Exception:
-                failed_pages.append(
-                    {
-                        'index': len(failed_pages) + 1,
-                        'url': current_url,
-                        'reason': 'html_save_error',
-                        'html_path': '',
-                    }
-                )
-                _write_failed_pages_manifest(start_url, outdir, failed_pages)
                 continue
 
             # Persist URL -> local HTML mapping after each new save.
