@@ -23,7 +23,7 @@ python scrape.py scrape https://example.com -o output
 
 ```bash
 python scrape.py save https://example.com -o output
-python scrape.py analyze output/<manifest>.json
+python scrape.py analyze output/<site>_cache.json
 ```
 
 3. 多页面递归抓取示例：
@@ -50,7 +50,9 @@ python scrape.py scrape https://www.bosch.com/careers -o output --all
 输出说明：
 
 - 每个页面都会生成：`0001_path_html_时间.html` 和 `0001_path_html_时间.json`
-- 同时生成一个汇总文件：`*_summary.json`
+- `save` 会生成抓取缓存文件：`*_cache.json`
+- `analyze` 会基于 `*_cache.json` 生成汇总文件：`*_summary.json`
+- 抓取失败的页面会保存到 `output/failed/`
 - 终端输出格式：`X个页面，Y个媒体元素`
 
 页面 JSON 结构：
