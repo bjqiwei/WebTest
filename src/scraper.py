@@ -424,44 +424,39 @@ def fetch_html_with_playwright(url: str, timeout=30, wait_seconds: float = 5.0, 
 
         def _capture_current_page_html() -> str:
             current_html = page.content()
-            wait_budget = max(wait_seconds + 15.0, 20.0)
-            deadline = time.time() + wait_budget
-            settled_after_readable = False
+            body_deadline = time.time() + max(float(timeout), 10.0)
 
-            # Wait for challenge clearance and a minimally complete document before capture.
-            while time.time() < deadline:
+            # Wait until document body becomes readable.
+            while time.time() < body_deadline:
                 current_html = page.content()
                 lowered = current_html.lower()
                 has_body = '<body' in lowered
                 if not has_body:
                     page.wait_for_timeout(1000)
                     continue
+                break
 
-                # 按要求：页面可读取后先额外等待，再判断是否挑战页。
-                if not settled_after_readable:
-                    settle_wait_seconds = max(wait_seconds, 5.0)
-                    remaining = max(0.0, deadline - time.time())
-                    actual_wait = min(settle_wait_seconds, remaining)
-                    _log(f'页面已可读取，额外等待{actual_wait:.1f}秒: {url}')
-                    if actual_wait > 0:
-                        time.sleep(actual_wait)
-                    settled_after_readable = True
+            current_html = page.content()
+
+            # 用户设置的额外等待应精确生效，不再隐式叠加额外秒数。
+            settle_wait_seconds = max(float(wait_seconds), 0.0)
+            _log(f'页面已可读取，额外等待{settle_wait_seconds:.1f}秒: {url}')
+            if settle_wait_seconds > 0:
+                time.sleep(settle_wait_seconds)
+            current_html = page.content()
+
+            # Only when a challenge page is detected do we wait longer for verification.
+            if _is_challenge_or_block_page(current_html):
+                challenge_wait_seconds = max(10.0, settle_wait_seconds)
+                challenge_deadline = time.time() + challenge_wait_seconds
+                _log(f'检测到挑战页，额外最多等待{challenge_wait_seconds:.1f}秒: {url}')
+                while time.time() < challenge_deadline:
+                    if _try_click_challenge_checkbox(page):
+                        _log(f'已尝试自动勾选安全验证: {url}')
+                    page.wait_for_timeout(1000)
                     current_html = page.content()
-                    if time.time() >= deadline:
+                    if not _is_challenge_or_block_page(current_html):
                         break
-
-                # 即使挑战页识别漏判，也持续尝试自动点击验证控件。
-                if _try_click_challenge_checkbox(page):
-                    _log(f'已尝试自动勾选安全验证: {url}')
-
-                challenge = _is_challenge_or_block_page(current_html)
-                if not challenge:
-                    break
-
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    break
-                page.wait_for_timeout(min(1000, int(remaining * 1000)))
 
             return page.content()
 
