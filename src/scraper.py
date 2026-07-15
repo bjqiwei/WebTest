@@ -30,7 +30,7 @@ NOISE_KEYWORDS = ('footer', 'cookie', 'consent', 'breadcrumb', 'share', 'related
 VIDEO_FILE_RE = re.compile(r'\.(mp4|m3u8|webm|ogg)(\?|$)', re.I)
 EMBED_RE = re.compile(r'youtube|youtu\.be|vimeo|player|wistia', re.I)
 IMAGE_FILE_RE = re.compile(r'\.(png|jpe?g|webp|gif|bmp|svg)(\?|$)', re.I)
-HTML_CONTENT_TYPE_RE = re.compile(r'text/html|application/xhtml\+xml', re.I)
+HTML_CONTENT_TYPE_RE = re.compile(r'^\s*(?:text/html|application/xhtml\+xml)\s*(?:;|$)', re.I)
 DEFAULT_USER_AGENT = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
     'AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -437,6 +437,8 @@ def fetch_html_with_playwright(
         if response is not None:
             ctype = response.headers.get('content-type', '')
             if ctype and not HTML_CONTENT_TYPE_RE.search(ctype):
+                page.close()
+                browser.close()
                 raise RuntimeError(f'Non-HTML content type: {ctype}')
         try:
             page.wait_for_load_state('load', timeout=timeout * 1000)
@@ -497,6 +499,8 @@ def fetch_html_with_playwright(
                     if response is not None:
                         ctype = response.headers.get('content-type', '')
                         if ctype and not HTML_CONTENT_TYPE_RE.search(ctype):
+                            page.close()
+                            browser.close()
                             raise RuntimeError(f'Non-HTML content type: {ctype}')
                     try:
                         page.wait_for_load_state('load', timeout=timeout * 1000)
