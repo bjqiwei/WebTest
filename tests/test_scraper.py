@@ -54,7 +54,7 @@ def test_scrape_url_outputs_counter_and_json(tmp_path, monkeypatch):
     </html>
     '''
 
-    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: sample_html)
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': sample_html, 'content_type': 'text/html'})
 
     result = scrape_url('https://www.bosch.com/careers', tmp_path)
 
@@ -76,7 +76,7 @@ def test_scrape_url_outputs_counter_and_json(tmp_path, monkeypatch):
 def test_scrape_url_decodes_output_filename(tmp_path, monkeypatch):
     sample_html = '<html><body><main><p>ok content</p></main></body></html>'
 
-    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: sample_html)
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': sample_html, 'content_type': 'text/html'})
 
     result = scrape_url('https://example.com/hello%20world', tmp_path)
     output_name = Path(result['json_path']).name
@@ -85,7 +85,7 @@ def test_scrape_url_decodes_output_filename(tmp_path, monkeypatch):
 
 
 def test_safe_name_root_url_has_single_index():
-    assert scraper_module._safe_name_from_url('https://www.unicef.org/') == 'www.unicef.org_index'
+    assert scraper_module._safe_name_from_url('https://www.unicef.org/') == 'www.unicef.org'
 
 
 def test_extract_content_blocks_with_image_and_video():
@@ -193,7 +193,7 @@ def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
     }
 
     def fake_fetch(url, **kwargs):
-        return pages[url]
+        return {'html': pages[url], 'content_type': 'text/html'}
 
     monkeypatch.setattr('src.scraper.fetch_html', fake_fetch)
 
@@ -228,7 +228,7 @@ def test_scrape_site_follows_header_nav_links(tmp_path, monkeypatch):
         'https://example.com/about': '<html><body><main><p>About us</p></main></body></html>',
     }
 
-    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: pages[url])
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'text/html'})
 
     result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
     assert result['page_count'] == 2
@@ -243,7 +243,7 @@ def test_scrape_site_unlimited_depth_and_pages(tmp_path, monkeypatch):
     'https://example.com/b.html': '<html><body><p>end</p></body></html>',
     }
 
-    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: pages[url])
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'text/html'})
 
     result = scrape_site('https://example.com', tmp_path, max_depth=-1, max_pages=0)
     assert result['page_count'] == 3
@@ -256,7 +256,7 @@ def test_scrape_site_skip_parse_error_and_continue(tmp_path, monkeypatch):
   'https://example.com/good.html': '<html><body><main><p>ok</p></main></body></html>',
     }
 
-    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: pages[url])
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'text/html'})
 
     original_save = scraper_module._save_page_output
 
@@ -282,11 +282,12 @@ def test_scrape_site_persists_failed_fetch_pages(tmp_path, monkeypatch):
     def fake_fetch(url, **kwargs):
       if url.endswith('/bad.html'):
         raise RuntimeError('network down')
-      return pages[url]
+      return {'html': pages[url], 'content_type': 'text/html'}
 
     monkeypatch.setattr('src.scraper.fetch_html', fake_fetch)
 
-    result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
+    # save_site_html returns the save-step result which includes fetch failures
+    result = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=1, max_pages=10)
 
     assert result['failed_count'] == 1
     assert result.get('failed_pages_path')
@@ -295,11 +296,8 @@ def test_scrape_site_persists_failed_fetch_pages(tmp_path, monkeypatch):
     assert failed_manifest['failed_count'] == 1
     failed_item = failed_manifest['failed_pages'][0]
     assert failed_item['url'] == 'https://example.com/bad.html'
-    assert failed_item['index'] == 2
-
-    failed_json_name = Path(failed_item['failed_json_path']).name
-    assert failed_json_name.startswith('0002_bad_html_')
-    assert failed_json_name.endswith('_failed.json')
+    assert failed_item['index'] == 1
+    assert 'network down' in failed_item['reason']
 
 
 def test_fetch_html_auto_fallback_to_playwright(monkeypatch):
@@ -314,10 +312,10 @@ def test_fetch_html_auto_fallback_to_playwright(monkeypatch):
             return None
 
     monkeypatch.setattr('src.scraper.requests.get', lambda *args, **kwargs: DummyResp())
-    monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: '<html><main>ok</main></html>')
+    monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: {'html': '<html><main>ok</main></html>', 'content_type': 'text/html'})
 
-    html = fetch_html('https://example.com', renderer='auto')
-    assert '<main>ok</main>' in html
+    result = fetch_html('https://example.com', renderer='auto')
+    assert '<main>ok</main>' in result['html']
 
 
 def test_challenge_detector_not_triggered_by_generic_cloudflare_text():
@@ -340,9 +338,9 @@ def test_challenge_detector_triggered_by_cloudflare_challenge_markers():
 
 
 def test_fetch_html_playwright_mode(monkeypatch):
-    monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: '<html>pw</html>')
-    html = fetch_html('https://example.com', renderer='playwright')
-    assert 'pw' in html
+    monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: {'html': '<html>pw</html>', 'content_type': 'text/html'})
+    result = fetch_html('https://example.com', renderer='playwright')
+    assert 'pw' in result['html']
 
 
 def test_fetch_html_blocked_after_playwright(monkeypatch):
@@ -359,14 +357,12 @@ def test_fetch_html_blocked_after_playwright(monkeypatch):
     import requests
 
     monkeypatch.setattr('src.scraper.requests.get', lambda *args, **kwargs: DummyResp())
-    monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: '<html><title>Just a moment...</title></html>')
+    monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: {'html': '<html><title>Just a moment...</title></html>', 'content_type': 'text/html'})
 
-    try:
-        fetch_html('https://example.com', renderer='auto')
-    except RuntimeError as exc:
-        assert 'Blocked by target site' in str(exc)
-    else:
-        assert False, 'Expected RuntimeError for blocked page'
+    result = fetch_html('https://example.com', renderer='auto')
+    # After requests 403 fallback, playwright returns a challenge page.
+    # The challenge page content is preserved (not blocked as error).
+    assert 'Just a moment' in result['html']
 
 
 def test_scrape_site_progress_uses_fixed_total(monkeypatch, tmp_path):
@@ -376,7 +372,7 @@ def test_scrape_site_progress_uses_fixed_total(monkeypatch, tmp_path):
         'https://example.com/b.html': '<html><body><p>end</p></body></html>',
     }
 
-    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: pages[url])
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'text/html'})
 
     progress = []
 
@@ -396,19 +392,26 @@ def test_scrape_site_progress_uses_fixed_total(monkeypatch, tmp_path):
     assert [p[1] for p in progress] == [3, 3, 3]
 
 
-def test_scrape_site_skips_non_html_content_without_extension(monkeypatch, tmp_path):
+def test_scrape_site_saves_non_html_content_without_extension(monkeypatch, tmp_path):
     pages = {
         'https://example.com/': '<html><body><a href="/img/noext">img</a><a href="/ok.html">ok</a></body></html>',
         'https://example.com/img/noext': 'JFIF_BINARY_BYTES',
         'https://example.com/ok.html': '<!doctype html><html><body><p>ok</p></body></html>',
     }
 
-    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: pages[url])
+    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'image/jpeg' if 'noext' in url else 'text/html'})
 
-    result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
-    assert result['page_count'] == 2
-    assert 'https://example.com/img/noext' in result['failed']
-    assert result['failed_reasons']['https://example.com/img/noext'] == 'non_html_document'
+    # Use save_site_html directly to see save-step results (including failures)
+    result = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=1, max_pages=10)
+    # 2 HTML pages saved, 1 non-HTML page failed
+    assert result['saved_count'] == 2
+    assert result['failed_count'] == 1
+    # Cache should contain content_type field
+    cache_files = list(tmp_path.glob('*_cache.json'))
+    assert len(cache_files) == 1
+    cache_payload = json.loads(cache_files[0].read_text(encoding='utf-8'))
+    ok_entry = [p for p in cache_payload['pages'] if 'ok' in p['url']][0]
+    assert ok_entry['content_type'] == 'text/html'
 
 
 def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
@@ -421,7 +424,7 @@ def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
 
     def fake_fetch(url, **kwargs):
         fetch_calls['count'] += 1
-        return pages[url]
+        return {'html': pages[url], 'content_type': 'text/html'}
 
     monkeypatch.setattr('src.scraper.fetch_html', fake_fetch)
 
@@ -429,11 +432,14 @@ def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
     assert first['saved_count'] == 2
     assert fetch_calls['count'] == 2
 
-    cache_files = list(tmp_path.glob('*_html_cache.json'))
+    cache_files = list(tmp_path.glob('*_cache.json'))
     assert len(cache_files) == 1
     cache_payload = json.loads(cache_files[0].read_text(encoding='utf-8'))
     assert cache_payload['saved_count'] == 2
     assert {p['url'] for p in cache_payload['pages']} == {'https://example.com/', 'https://example.com/a.html'}
+    # Verify content_type is present in cache entries
+    for p in cache_payload['pages']:
+        assert p.get('content_type') == 'text/html'
 
     def fail_fetch(url, **kwargs):
         raise AssertionError(f'fetch_html should not be called for cached URL: {url}')

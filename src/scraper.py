@@ -411,12 +411,14 @@ def fetch_html_with_playwright(
     wait_seconds: float = 5.0,
     headless: bool = True,
     cdp_url: str = '',
-) -> str:
+) -> dict:
+    """返回 {'html': str, 'content_type': str}"""
     if sync_playwright is None:
         raise RuntimeError('Playwright is not installed. Run: pip install playwright and playwright install chromium')
 
+    body_deadline = time.time() + max(float(timeout), 10.0)
+
     with sync_playwright() as p:
-        _log(f'Playwright启动: {url}')
         use_cdp = bool(cdp_url)
         if use_cdp:
             _log(f'通过CDP连接Chrome: {cdp_url}')
@@ -427,102 +429,76 @@ def fetch_html_with_playwright(
                 context = browser.new_context(ignore_https_errors=True, user_agent=DEFAULT_USER_AGENT)
         else:
             browser = p.chromium.launch(headless=headless)
-            context = browser.new_context(
-                ignore_https_errors=True,
-                user_agent=DEFAULT_USER_AGENT,
-            )
+            context = browser.new_context(ignore_https_errors=True, user_agent=DEFAULT_USER_AGENT)
+        
         page = context.new_page()
-        _log(f'开始打开页面: {url}')
-        response = page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
-        if response is not None:
-            ctype = response.headers.get('content-type', '')
-            if ctype and not HTML_CONTENT_TYPE_RE.search(ctype):
-                page.close()
-                browser.close()
-                raise RuntimeError(f'Non-HTML content type: {ctype}')
         try:
-            page.wait_for_load_state('load', timeout=timeout * 1000)
-        except Exception:
-            # Some sites keep loading long-poll resources; proceed with timed readiness checks.
-            pass
-
-        body_deadline = time.time() + max(float(timeout), 10.0)
-
-        def _capture_current_page_html() -> str:
-            current_html = page.content()
-
-            # Wait until document body becomes readable.
-            while time.time() < body_deadline:
-                current_html = page.content()
-                lowered = current_html.lower()
-                has_body = '<body' in lowered
-                if not has_body:
-                    page.wait_for_timeout(1000)
-                    continue
-                break
-
-            current_html = page.content()
-
-            # 用户设置的额外等待应精确生效，不再隐式叠加额外秒数。
-            settle_wait_seconds = max(float(wait_seconds), 0.0)
-
-            # Only when a challenge page is detected do we wait longer for verification.
-            if _is_challenge_or_block_page(current_html):
-                challenge_wait_seconds = max(10.0, settle_wait_seconds)
-                challenge_deadline = time.time() + challenge_wait_seconds
-                _log(f'检测到挑战页，额外最多等待{challenge_wait_seconds:.1f}秒: {url}')
-                while time.time() < challenge_deadline:
-                    if _try_click_challenge_checkbox(page):
-                        _log(f'已尝试自动勾选安全验证: {url}')
-                    page.wait_for_timeout(1000)
-                    current_html = page.content()
-                    if not _is_challenge_or_block_page(current_html):
-                        break
+            _log(f'开始打开页面: {url}')
+            response = page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
+            if response is not None:
+                content_type = response.headers.get('content-type', '')
             else:
-                _log(f'未检测到挑战页，额外等待{settle_wait_seconds:.1f}秒: {url}')
-                if settle_wait_seconds > 0:
-                    time.sleep(settle_wait_seconds)
+                content_type = ''
 
-            return page.content()
+            try:
+                page.wait_for_load_state('load', timeout=max(1000, body_deadline - time.time()) * 1000)
+            except Exception:
+                # Some sites keep loading long-poll resources; proceed with timed readiness checks.
+                pass
 
-        html = _capture_current_page_html()
-        html_is_document = _is_html_document(html)
-        html_is_challenge = _is_challenge_or_block_page(html)
+            def _capture_current_page_html() -> str:
 
-        # Avoid forced reload when challenge is still on screen. Reloading often
-        # resets a manually completed challenge and triggers a new one.
-        if not html_is_document:
-            if time.time() < body_deadline:
-                _log(f'读取HTML未成功，刷新后重试一次: {url}')
+                # Wait until document body becomes readable.
                 try:
-                    response = page.reload(wait_until='domcontentloaded', timeout=timeout * 1000)
-                    if response is not None:
-                        ctype = response.headers.get('content-type', '')
-                        if ctype and not HTML_CONTENT_TYPE_RE.search(ctype):
-                            page.close()
-                            browser.close()
-                            raise RuntimeError(f'Non-HTML content type: {ctype}')
-                    try:
-                        page.wait_for_load_state('load', timeout=timeout * 1000)
-                    except Exception:
-                        pass
-                    html = _capture_current_page_html()
-                except Exception as exc:
-                    _log(f'刷新重试失败，继续使用首次读取结果: {url} -> {exc}')
+                    # 等待 DOM 加载完成（body 肯定存在）
+                    page.wait_for_load_state('domcontentloaded', timeout=max(1000, body_deadline - time.time()) * 1000)
+                except TimeoutError:
+                    _log(f'等待 DOM 加载超时: {url}')
+                    return ''
+
+                current_html = page.content()
+
+                # 用户设置的额外等待应精确生效，不再隐式叠加额外秒数。
+                settle_wait_seconds = max(float(wait_seconds), 1.0)
+
+                # Only when a challenge page is detected do we wait longer for verification.
+                if _is_challenge_or_block_page(current_html):
+                    challenge_wait_seconds = max(10.0, settle_wait_seconds)
+                    challenge_deadline = time.time() + challenge_wait_seconds
+                    _log(f'检测到挑战页，额外最多等待{challenge_wait_seconds:.1f}秒: {url}')
+                    while time.time() < challenge_deadline:
+                        if _try_click_challenge_checkbox(page):
+                            _log(f'已尝试自动勾选安全验证: {url}')
+                        page.wait_for_timeout(1000)
+                        current_html = page.content()
+                        if not _is_challenge_or_block_page(current_html):
+                            break
+                else:
+                    _log(f'未检测到挑战页，额外等待{settle_wait_seconds/2:.1f}秒: {url}')
+                    if settle_wait_seconds > 0:
+                        time.sleep(settle_wait_seconds / 2)
+
+                return page.content()
+
+            html = _capture_current_page_html()
+            html_is_challenge = _is_challenge_or_block_page(html)
+
+            # Avoid forced reload when challenge is still on screen. Reloading often
+            if html_is_challenge:
+                _log(f'挑战页仍未通过: {url}')
+                html = ''
+
+            _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
+        finally:
+            page.close()
+            if use_cdp:
+                # CDP模式：不关闭外部浏览器，只关闭page
+                _log(f'CDP页面已关闭: {url}')
             else:
-                _log(f'读取HTML超时，继续使用首次读取结果: {url}')
-        elif html_is_challenge:
-            _log(f'挑战页仍未通过，不执行自动刷新以避免触发新一轮验证: {url}')
-        _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
-        page.close()
-        if use_cdp:
-            browser.close()
-            _log(f'CDP连接已断开: {url}')
-        else:
-            context.close()
-            browser.close()
-            _log(f'浏览器已关闭: {url}')
-    return html
+                context.close()
+                browser.close()
+                _log(f'浏览器已关闭: {url}')
+    return {'html': html, 'content_type': content_type}
 
 
 def fetch_html(
@@ -532,26 +508,25 @@ def fetch_html(
     playwright_headless: bool = True,
     playwright_wait_seconds: float = 5.0,
     playwright_cdp_url: str = '',
-) -> str:
+) -> dict:
+    """返回 {'html': str, 'content_type': str}"""
     headers = {
         'User-Agent': DEFAULT_USER_AGENT
     }
     if renderer == 'playwright':
-        html = fetch_html_with_playwright(
+        result = fetch_html_with_playwright(
             url,
             timeout=max(timeout, 60),
             headless=playwright_headless,
             wait_seconds=playwright_wait_seconds,
             cdp_url=playwright_cdp_url,
         )
-        return html
+        return result
 
     try:
         r = requests.get(url, headers=headers, timeout=timeout)
         r.raise_for_status()
         ctype = r.headers.get('content-type', '')
-        if ctype and not HTML_CONTENT_TYPE_RE.search(ctype):
-            raise RuntimeError(f'Non-HTML content type: {ctype}')
         # Many sites return missing/incorrect charset headers. Prefer apparent encoding
         # so Unicode punctuation like em dash is preserved in saved JSON.
         if not r.encoding or r.encoding.lower() in ('iso-8859-1', 'latin1'):
@@ -559,26 +534,27 @@ def fetch_html(
         html = r.text
     except requests.RequestException:
         if renderer == 'auto':
-            html = fetch_html_with_playwright(
+            result = fetch_html_with_playwright(
                 url,
                 timeout=max(timeout, 60),
                 headless=playwright_headless,
                 wait_seconds=playwright_wait_seconds,
                 cdp_url=playwright_cdp_url,
             )
-            return html
+            return result
         raise
 
     if renderer == 'auto' and _is_challenge_or_block_page(html):
-        html = fetch_html_with_playwright(
+        result = fetch_html_with_playwright(
             url,
             timeout=max(timeout, 60),
             headless=playwright_headless,
             wait_seconds=playwright_wait_seconds,
             cdp_url=playwright_cdp_url,
         )
+        return result
 
-    return html
+    return {'html': html, 'content_type': ctype}
 
 
 def _save_html_snapshot(url: str, html: str, outdir: Path, page_index: int, timestamp: str) -> str:
@@ -680,7 +656,11 @@ def _load_html_cache(start_url: str, outdir: Path):
         if not page_url or not html_path:
             continue
         if Path(html_path).exists():
-            cache.append({'url': page_url, 'html_path': html_path})
+            cache.append({
+                'url': page_url,
+                'html_path': html_path,
+                'content_type': item.get('content_type', 'text/html'),
+            })
     return cache
 
 
@@ -716,11 +696,36 @@ def save_site_html(
     _failed_dir(outdir).mkdir(parents=True, exist_ok=True)
     root_host = urlparse(start_url).netloc
     visited = set()
-    queue = deque([(start_url, 0)])
-    queued = {start_url}
+    queue = deque()
     failed_pages = _load_failed_pages(start_url, outdir)
     html_cache = _load_html_cache(start_url, outdir)
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+
+    # 从本地缓存恢复：读取已保存的 HTML，提取链接放入 queue
+    for cached in html_cache:
+        cached_url = cached['url']
+        _log(f'Processing cached URL: {cached_url}')
+        # 只读取 content_type 为 html 的文件来提取链接
+        ctype = cached.get('content_type', '')
+        if not ctype or not HTML_CONTENT_TYPE_RE.search(ctype):
+            continue
+        cached_html_path = Path(cached['html_path'])
+        try:
+            cached_html = cached_html_path.read_text(encoding='utf-8')
+            links = _extract_links(cached_html, cached_url, root_host)
+            visited.add(cached_url)
+        except Exception:
+            links = []
+        # 从 URL 路径解析深度（path 分段数），新链接 depth + 1
+        cached_path = urlparse(cached_url).path.strip('/')
+        cached_depth = len(cached_path.split('/')) if cached_path else 0
+        for link in links:
+            if link not in visited:
+                queue.append((link, cached_depth + 1))
+
+    # 如果 start_url 不在缓存中，加入队列
+    if start_url not in visited:
+        queue.appendleft((start_url, 0))
     unlimited_depth = max_depth < 0
     unlimited_pages = max_pages <= 0
     max_concurrency = max(1, int(max_concurrency))
@@ -757,18 +762,21 @@ def save_site_html(
     def _fetch_one(item):
         page_url, _depth = item
         try:
-            html_text = fetch_html(
+            fetch_result = fetch_html(
                 page_url,
                 renderer=renderer,
                 playwright_headless=playwright_headless,
                 playwright_wait_seconds=playwright_wait_seconds,
                 playwright_cdp_url=playwright_cdp_url,
             )
+            html_text = fetch_result['html']
+            content_type = fetch_result.get('content_type', '')
             return {
                 'url': page_url,
                 'html': html_text,
                 'html_path': '',
                 'error': '',
+                'content_type': content_type,
             }
         except Exception as exc:
             return {
@@ -776,6 +784,7 @@ def save_site_html(
                 'html': '',
                 'html_path': '',
                 'error': str(exc),
+                'content_type': '',
             }
 
     if callable(phase_callback):
@@ -793,7 +802,6 @@ def save_site_html(
         batch = []
         while queue and len(batch) < per_round:
             current_url, depth = queue.popleft()
-            queued.discard(current_url)
             if current_url in visited:
                 continue
             if not re.search(r'\.html?$', urlparse(current_url).path, re.IGNORECASE) and '.' in Path(urlparse(current_url).path).suffix:
@@ -802,37 +810,14 @@ def save_site_html(
             batch.append((current_url, depth))
 
         if not batch:
-            continue
+            _log('No batch to process')
 
         result_by_url = {}
-        to_fetch = []
-        for current_url, _depth in batch:
-            html = ''
-            html_path = ''
-            cached = _cached_entry_for(current_url)
-            cached_path = cached.get('html_path', '') if cached else ''
-            if cached_path:
-                try:
-                    html = Path(cached_path).read_text(encoding='utf-8')
-                    html_path = cached_path
-                except Exception:
-                    html = ''
-                    html_path = ''
 
-            if html:
-                result_by_url[current_url] = {
-                    'url': current_url,
-                    'html': html,
-                    'html_path': html_path,
-                    'error': '',
-                }
-            else:
-                to_fetch.append((current_url, _depth))
-
-        if to_fetch:
-            worker_count = min(max_concurrency, len(to_fetch))
+        if batch:
+            worker_count = min(max_concurrency, len(batch))
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                fetched_results = list(executor.map(_fetch_one, to_fetch))
+                fetched_results = list(executor.map(_fetch_one, batch))
             for item in fetched_results:
                 result_by_url[item['url']] = item
 
@@ -846,18 +831,18 @@ def save_site_html(
             fetch_error = item.get('error', '')
 
             if fetch_error:
-                failed_html = (
-                    '<!doctype html><html><head><meta charset="utf-8"></head><body>'
-                    f'<h1>fetch_failed</h1><p>{fetch_error}</p>'
-                    '</body></html>'
-                )
-                _append_failed(current_url, fetch_error, failed_html)
+                _append_failed(current_url, fetch_error, html)
                 continue
 
-            if not _is_html_document(html) or _is_challenge_or_block_page(html):
-                reason = 'non_html_document' if not _is_html_document(html) else 'challenge_or_block'
-                _append_failed(current_url, reason, html)
+            if _is_challenge_or_block_page(html):
+                _append_failed(current_url, 'challenge_or_block', html)
                 continue
+
+            if not _is_html_document(html):
+                _append_failed(current_url, 'not_html_document', html)
+                continue
+
+            content_type = item.get('content_type', '')
 
             if not html_path:
                 page_index = len(html_cache) + 1
@@ -873,7 +858,7 @@ def save_site_html(
                 except Exception:
                     continue
 
-                html_cache.append({'url': current_url, 'html_path': html_path})
+                html_cache.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
                 _write_html_cache(start_url, outdir, html_cache)
 
             if not unlimited_depth and depth >= max_depth:
@@ -885,9 +870,8 @@ def save_site_html(
                 links = []
 
             for link in links:
-                if link not in visited and link not in queued:
+                if link not in visited:
                     queue.append((link, depth + 1))
-                    queued.add(link)
 
     _write_html_cache(start_url, outdir, html_cache)
     cache_path = _html_cache_path(start_url, outdir)
