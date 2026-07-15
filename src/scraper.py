@@ -828,6 +828,7 @@ def save_site_html(
         for current_url, depth in batch:
             item = result_by_url.get(current_url)
             if not item:
+                _log(f'未获取到页面: {current_url}')
                 continue
 
             html = item.get('html', '')
@@ -835,15 +836,13 @@ def save_site_html(
             fetch_error = item.get('error', '')
 
             if fetch_error:
+                _log(f'抓取页面失败: {current_url}, 错误: {fetch_error}')
                 _append_failed(current_url, fetch_error, html)
                 continue
 
             if _is_challenge_or_block_page(html):
+                _log(f'挑战或封锁页面: {current_url}')
                 _append_failed(current_url, 'challenge_or_block', html)
-                continue
-
-            if not _is_html_document(html):
-                _append_failed(current_url, 'not_html_document', html)
                 continue
 
             content_type = item.get('content_type', '')

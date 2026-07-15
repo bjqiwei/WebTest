@@ -403,13 +403,15 @@ def test_scrape_site_saves_non_html_content_without_extension(monkeypatch, tmp_p
 
     # Use save_site_html directly to see save-step results (including failures)
     result = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=1, max_pages=10)
-    # 2 HTML pages saved, 1 non-HTML page failed
-    assert result['saved_count'] == 2
-    assert result['failed_count'] == 1
+    # All 3 pages saved (non-HTML content no longer rejected)
+    assert result['saved_count'] == 3
+    assert result['failed_count'] == 0
     # Cache should contain content_type field
     cache_files = list(tmp_path.glob('*_cache.json'))
     assert len(cache_files) == 1
     cache_payload = json.loads(cache_files[0].read_text(encoding='utf-8'))
+    noext_entry = [p for p in cache_payload['pages'] if 'noext' in p['url']][0]
+    assert noext_entry['content_type'] == 'image/jpeg'
     ok_entry = [p for p in cache_payload['pages'] if 'ok' in p['url']][0]
     assert ok_entry['content_type'] == 'text/html'
 
