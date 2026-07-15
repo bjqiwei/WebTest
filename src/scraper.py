@@ -441,6 +441,7 @@ def fetch_html_with_playwright(
                 content_type = ''
 
             try:
+                _log(f'等待页面完全加载: {url}，超时时间: {body_deadline - time.time():.1f}秒')
                 page.wait_for_load_state('load', timeout=max(1000, body_deadline - time.time()) * 1000)
             except Exception:
                 # Some sites keep loading long-poll resources; proceed with timed readiness checks.
@@ -451,6 +452,7 @@ def fetch_html_with_playwright(
                 # Wait until document body becomes readable.
                 try:
                     # 等待 DOM 加载完成（body 肯定存在）
+                    _log(f'等待 DOM 加载完成: {url} 超时时间: {body_deadline - time.time():.1f}秒')
                     page.wait_for_load_state('domcontentloaded', timeout=max(1000, body_deadline - time.time()) * 1000)
                 except TimeoutError:
                     _log(f'等待 DOM 加载超时: {url}')
@@ -489,6 +491,8 @@ def fetch_html_with_playwright(
                 html = ''
 
             _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
+        except Exception as e:
+            _log(f'抓取页面异常: {url}, 错误: {e}')
         finally:
             page.close()
             if use_cdp:
