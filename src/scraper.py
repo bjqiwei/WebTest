@@ -436,7 +436,7 @@ def fetch_html_with_playwright(
         content_type = ''
         try:
             _log(f'开始打开页面: {url}')
-            response = page.goto(url, wait_until='commit', timeout=max(1000, body_deadline - time.time()) * 1000)
+            response = page.goto(url, wait_until='domcontentloaded', timeout=max(1000, body_deadline - time.time()) * 1000)
             if response is not None:
                 content_type = response.headers.get('content-type', '')
             else:
