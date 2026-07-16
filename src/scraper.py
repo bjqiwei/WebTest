@@ -483,12 +483,6 @@ def fetch_html_with_playwright(
                 return page.content()
 
             html = _capture_current_page_html()
-            html_is_challenge = _is_challenge_or_block_page(html)
-
-            # Avoid forced reload when challenge is still on screen. Reloading often
-            if html_is_challenge:
-                _log(f'挑战页仍未通过: {url}')
-                html = ''
 
             _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
         except Exception as e:
