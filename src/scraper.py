@@ -432,6 +432,8 @@ def fetch_html_with_playwright(
             context = browser.new_context(ignore_https_errors=True, user_agent=DEFAULT_USER_AGENT)
         
         page = context.new_page()
+        html = ''
+        content_type = ''
         try:
             _log(f'开始打开页面: {url}')
             response = page.goto(url, wait_until='commit', timeout=max(1000, body_deadline - time.time()) * 1000)
@@ -480,6 +482,7 @@ def fetch_html_with_playwright(
             _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
         except Exception as e:
             _log(f'抓取页面异常: {url}, 错误: {e}')
+            raise
         finally:
             page.close()
             if use_cdp:
@@ -657,7 +660,7 @@ def _load_html_cache(start_url: str, outdir: Path):
 
 def _write_html_cache(start_url: str, outdir: Path, cache: list):
     cache_path = _html_cache_path(start_url, outdir)
-    pages = [item for item in cache if isinstance(item, dict) and item.get('url') and item.get('html_path')]
+    pages = [item for item in cache if isinstance(item, dict) and item.get('url')]
     payload = {
         'start_url': start_url,
         'saved_count': len(pages),
@@ -825,7 +828,7 @@ def save_site_html(
             fetch_error = item.get('error', '')
             content_type = item.get('content_type', '')
 
-            if fetch_error:
+            if fetch_error or not content_type:
                 _log(f'抓取页面失败: {current_url}, 错误: {fetch_error}')
                 _append_failed(current_url, fetch_error, html)
                 continue
@@ -840,24 +843,23 @@ def save_site_html(
                 _append_failed(current_url, 'not_html_document', html)
                 continue
 
-            if not html_path:
-                if HTML_CONTENT_TYPE_RE.search(content_type):
-                    page_index = len(html_cache) + 1
-                    _log(f"正在保存 HTML: {current_url} (深度 {depth}, 页面索引 {page_index})")
-                    try:
-                        html_path = _save_html_snapshot(
-                            current_url,
-                            html,
-                            outdir,
-                            page_index=page_index,
-                            timestamp=timestamp,
-                        )
-                    except Exception as e:
-                        _log(f'保存 HTML 失败: {current_url}, 错误: {e}')
-                        continue
+            
+            if HTML_CONTENT_TYPE_RE.search(content_type):
+                page_index = len(html_cache) + 1
+                _log(f"正在保存 HTML: {current_url} (深度 {depth}, 页面索引 {page_index})")
+                try:
+                    html_path = _save_html_snapshot(
+                        current_url,
+                        html,
+                        outdir,
+                        page_index=page_index,
+                        timestamp=timestamp,
+                    )
+                except Exception as e:
+                    _log(f'保存 HTML 失败: {current_url}, 错误: {e}')
+                    continue
 
-                html_cache.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
-                _write_html_cache(start_url, outdir, html_cache)
+            html_cache.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
 
             if not unlimited_depth and depth >= max_depth:
                 continue
@@ -870,6 +872,8 @@ def save_site_html(
             for link in links:
                 if link not in visited:
                     queue.append((link, depth + 1))
+
+        _write_html_cache(start_url, outdir, html_cache)
 
     _write_html_cache(start_url, outdir, html_cache)
     cache_path = _html_cache_path(start_url, outdir)
