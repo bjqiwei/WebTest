@@ -434,18 +434,11 @@ def fetch_html_with_playwright(
         page = context.new_page()
         try:
             _log(f'开始打开页面: {url}')
-            response = page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
+            response = page.goto(url, wait_until='commit', timeout=max(1000, body_deadline - time.time()) * 1000)
             if response is not None:
                 content_type = response.headers.get('content-type', '')
             else:
                 content_type = ''
-
-            try:
-                _log(f'等待页面完全加载: {url}，超时时间: {body_deadline - time.time():.1f}秒')
-                page.wait_for_load_state('load', timeout=max(1000, body_deadline - time.time()) * 1000)
-            except Exception:
-                # Some sites keep loading long-poll resources; proceed with timed readiness checks.
-                pass
 
             def _capture_current_page_html() -> str:
 
@@ -702,13 +695,15 @@ def save_site_html(
     # 从本地缓存恢复：读取已保存的 HTML，提取链接放入 queue
     for cached in html_cache:
         cached_url = cached['url']
-        _log(f'Processing cached URL: {cached_url}')
         # 只读取 content_type 为 html 的文件来提取链接
         ctype = cached.get('content_type', '')
-        if not ctype or not HTML_CONTENT_TYPE_RE.search(ctype):
+        if not HTML_CONTENT_TYPE_RE.search(ctype):
+            visited.add(cached_url)
+            _log(f'跳过非 HTML 缓存 URL: {cached_url} (content_type={ctype})')
             continue
         cached_html_path = Path(cached['html_path'])
         try:
+            _log(f'Processing cached URL: {cached_url}')
             cached_html = cached_html_path.read_text(encoding='utf-8')
             links = _extract_links(cached_html, cached_url, root_host)
             visited.add(cached_url)
@@ -828,32 +823,38 @@ def save_site_html(
             html = item.get('html', '')
             html_path = item.get('html_path', '')
             fetch_error = item.get('error', '')
+            content_type = item.get('content_type', '')
 
             if fetch_error:
                 _log(f'抓取页面失败: {current_url}, 错误: {fetch_error}')
                 _append_failed(current_url, fetch_error, html)
                 continue
 
-            if _is_challenge_or_block_page(html):
+            if HTML_CONTENT_TYPE_RE.search(content_type) and _is_challenge_or_block_page(html):
                 _log(f'挑战或封锁页面: {current_url}')
                 _append_failed(current_url, 'challenge_or_block', html)
                 continue
 
-            content_type = item.get('content_type', '')
+            if HTML_CONTENT_TYPE_RE.search(content_type) and not _is_html_document(html):
+                _log(f'非 HTML 文档: {current_url}')
+                _append_failed(current_url, 'not_html_document', html)
+                continue
 
             if not html_path:
-                page_index = len(html_cache) + 1
-                _log(f"正在保存 HTML: {current_url} (深度 {depth}, 页面索引 {page_index})")
-                try:
-                    html_path = _save_html_snapshot(
-                        current_url,
-                        html,
-                        outdir,
-                        page_index=page_index,
-                        timestamp=timestamp,
-                    )
-                except Exception:
-                    continue
+                if HTML_CONTENT_TYPE_RE.search(content_type):
+                    page_index = len(html_cache) + 1
+                    _log(f"正在保存 HTML: {current_url} (深度 {depth}, 页面索引 {page_index})")
+                    try:
+                        html_path = _save_html_snapshot(
+                            current_url,
+                            html,
+                            outdir,
+                            page_index=page_index,
+                            timestamp=timestamp,
+                        )
+                    except Exception as e:
+                        _log(f'保存 HTML 失败: {current_url}, 错误: {e}')
+                        continue
 
                 html_cache.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
                 _write_html_cache(start_url, outdir, html_cache)
