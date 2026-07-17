@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from datetime import datetime
 import hashlib
 from collections import deque
@@ -648,48 +649,99 @@ def _write_failed_pages_manifest(start_url: str, outdir: Path, failed_pages: lis
     return str(failed_path)
 
 
-def _html_cache_path(start_url: str, outdir: Path) -> Path:
+def _manifest_path(start_url: str, outdir: Path) -> Path:
+    """最终生成的 manifest JSON 路径（供 analyze_saved_html 消费）。"""
     return outdir / f"{_safe_name_from_url(start_url)}_cache.json"
 
 
-def _load_html_cache(start_url: str, outdir: Path):
-    cache_path = _html_cache_path(start_url, outdir)
-    if not cache_path.exists():
-        return []
+def _scrape_db_path(start_url: str, outdir: Path) -> Path:
+    """合并后的 SQLite 数据库路径（含 pages 和 links 两个表）。"""
+    return outdir / f"{_safe_name_from_url(start_url)}_scrape.db"
 
+
+def _init_db(db_path: Path) -> sqlite3.Connection:
+    """打开（或创建）scrape 数据库，创建 pages 和 links 两张表，返回连接对象。"""
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS pages ("
+        "  url TEXT PRIMARY KEY,"
+        "  html_path TEXT NOT NULL,"
+        "  content_type TEXT NOT NULL DEFAULT ''"
+        ")"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS links ("
+        "  url TEXT PRIMARY KEY,"
+        "  links TEXT NOT NULL"
+        ")"
+    )
+    conn.commit()
+    return conn
+
+
+def _load_html_cache_from_db(start_url: str, outdir: Path) -> list:
+    """从 SQLite 加载全部页面缓存到内存 list。"""
+    db_path = _scrape_db_path(start_url, outdir)
+    if not db_path.exists():
+        return []
     try:
-        with open(cache_path, 'r', encoding='utf-8') as f:
-            payload = json.load(f)
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA journal_mode=WAL")
+        cursor = conn.execute("SELECT url, html_path, content_type FROM pages")
+        cache = [{'url': url, 'html_path': html_path, 'content_type': content_type}
+                 for url, html_path, content_type in cursor]
+        conn.close()
+        return cache
     except Exception:
         return []
 
-    entries = payload.get('pages', []) if isinstance(payload, dict) else []
-    cache = []
-    for item in entries:
-        if not isinstance(item, dict):
-            continue
-        page_url = item.get('url', '')
-        html_path = item.get('html_path', '')
-        if not page_url:
-            continue
-        cache.append({
-            'url': page_url,
-            'html_path': html_path,
-            'content_type': item.get('content_type', 'text/html'),
-        })
-    return cache
+
+def _flush_html_batch(conn: sqlite3.Connection, entries: list):
+    """批量写（INSERT OR REPLACE）脏页面记录到 SQLite。"""
+    if not entries:
+        return
+    try:
+        rows = [(e['url'], e['html_path'], e.get('content_type', '')) for e in entries]
+        conn.executemany(
+            "INSERT OR REPLACE INTO pages (url, html_path, content_type) VALUES (?, ?, ?)", rows
+        )
+        conn.commit()
+    except Exception:
+        pass
 
 
-def _write_html_cache(start_url: str, outdir: Path, cache: list):
-    cache_path = _html_cache_path(start_url, outdir)
-    pages = [item for item in cache if isinstance(item, dict) and item.get('url')]
-    payload = {
-        'start_url': start_url,
-        'saved_count': len(pages),
-        'pages': pages,
-    }
-    with open(cache_path, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+def _load_links_cache_from_db(start_url: str, outdir: Path) -> dict:
+    """从 SQLite 加载全部链接缓存到内存 dict。"""
+    db_path = _scrape_db_path(start_url, outdir)
+    if not db_path.exists():
+        return {}
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA journal_mode=WAL")
+        cursor = conn.execute("SELECT url, links FROM links")
+        result = {}
+        for url, links_json in cursor:
+            try:
+                result[url] = json.loads(links_json)
+            except Exception:
+                result[url] = []
+        conn.close()
+        return result
+    except Exception:
+        return {}
+
+
+def _flush_links_batch(conn: sqlite3.Connection, entries: dict):
+    """批量写（INSERT OR REPLACE）脏 URL 的链接列表到 SQLite。"""
+    if not entries:
+        return
+    try:
+        rows = [(url, json.dumps(links, ensure_ascii=False)) for url, links in entries.items()]
+        conn.executemany("INSERT OR REPLACE INTO links (url, links) VALUES (?, ?)", rows)
+        conn.commit()
+    except Exception:
+        pass
 
 
 def save_site_html(
@@ -715,10 +767,17 @@ def save_site_html(
     visited = set()
     queue = deque()
     failed_pages = _load_failed_pages(start_url, outdir)
-    html_cache = _load_html_cache(start_url, outdir)
+    html_cache = _load_html_cache_from_db(start_url, outdir)
+    _log(f'Loaded {len(html_cache)} cached pages from SQLite.')
+    links_cache = _load_links_cache_from_db(start_url, outdir)
+    _log(f'Loaded {len(links_cache)} cached links from SQLite.')
+    conn = _init_db(_scrape_db_path(start_url, outdir))  # 单个持久连接，含 pages + links 两张表
+    _log(f'Initialized SQLite database at {_scrape_db_path(start_url, outdir)}.')
+    dirty_html: list = []  # 自上次 flush 后新增的页面记录
+    dirty_links: dict = {}  # 记录自上次 flush 后变更的 url -> links
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
 
-    # 从本地缓存恢复：读取已保存的 HTML，提取链接放入 queue
+    # 从本地缓存恢复：优先使用 links_cache 避免重新解析 HTML
     for cached in html_cache:
         cached_url = cached['url']
         # 只读取 content_type 为 html 的文件来提取链接
@@ -727,14 +786,18 @@ def save_site_html(
             visited.add(cached_url)
             _log(f'跳过非 HTML 缓存 URL: {cached_url} (content_type={ctype})')
             continue
-        cached_html_path = Path(cached['html_path'])
-        try:
-            _log(f'Processing cached URL: {cached_url}')
-            cached_html = cached_html_path.read_text(encoding='utf-8')
-            links = _extract_links(cached_html, cached_url, root_host)
-            visited.add(cached_url)
-        except Exception:
-            links = []
+        # 优先从 links_cache 读取，否则回退到解析 HTML
+        links = links_cache.get(cached_url, [])
+        if not links:
+            cached_html_path = Path(cached['html_path'])
+            try:
+                _log(f'Processing cached URL: {cached_url}')
+                cached_html = cached_html_path.read_text(encoding='utf-8')
+                links = _extract_links(cached_html, cached_url, root_host)
+                dirty_links[cached_url] = links
+            except Exception:
+                links = []
+        visited.add(cached_url)
         # 从 URL 路径解析深度（path 分段数），新链接 depth + 1
         cached_path = urlparse(cached_url).path.strip('/')
         cached_depth = len(cached_path.split('/')) if cached_path else 0
@@ -748,12 +811,6 @@ def save_site_html(
     unlimited_depth = max_depth < 0
     unlimited_pages = max_pages <= 0
     max_concurrency = max(1, int(max_concurrency))
-
-    def _cached_entry_for(page_url: str):
-        for item in html_cache:
-            if item.get('url') == page_url:
-                return item
-        return None
 
     def _append_failed(page_url: str, reason: str, html: str = ''):
         failed_html_path = ''
@@ -883,6 +940,7 @@ def save_site_html(
                     continue
 
             html_cache.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
+            dirty_html.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
 
             if not unlimited_depth and depth >= max_depth:
                 continue
@@ -891,6 +949,7 @@ def save_site_html(
             try:
                 if HTML_CONTENT_TYPE_RE.search(content_type):
                     links = _extract_links(html, current_url, root_host)
+                    dirty_links[current_url] = links
             except Exception:
                 links = []
 
@@ -898,17 +957,34 @@ def save_site_html(
                 if link not in visited:
                     queue.append((link, depth + 1))
 
-        _write_html_cache(start_url, outdir, html_cache)
+        _flush_html_batch(conn, dirty_html)
+        dirty_html.clear()
+        _flush_links_batch(conn, dirty_links)
+        dirty_links.clear()
 
-    _write_html_cache(start_url, outdir, html_cache)
-    cache_path = _html_cache_path(start_url, outdir)
+    _flush_html_batch(conn, dirty_html)
+    dirty_html.clear()
+    _flush_links_batch(conn, dirty_links)
+    dirty_links.clear()
+    conn.close()
+    # 写入最终 manifest JSON 供 analyze_saved_html 消费
+    manifest_path = _manifest_path(start_url, outdir)
+    manifest_payload = {
+        'start_url': start_url,
+        'saved_count': len(html_cache),
+        'pages': [{'url': p['url'], 'html_path': p['html_path'], 'content_type': p.get('content_type', '')}
+                  for p in html_cache],
+    }
+    with open(manifest_path, 'w', encoding='utf-8') as f:
+        json.dump(manifest_payload, f, ensure_ascii=False, indent=2)
+
     result = {
         'start_url': start_url,
         'saved_count': len(html_cache),
         'pages': html_cache,
     }
     result['failed_count'] = len(failed_pages)
-    result['summary_path'] = str(cache_path)
+    result['summary_path'] = str(manifest_path)
     result['failed_pages_path'] = str(_failed_pages_path(start_url, outdir))
     return result
 
