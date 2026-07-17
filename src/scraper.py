@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import re
 from datetime import datetime
@@ -38,9 +40,26 @@ DEFAULT_USER_AGENT = (
 )
 
 
+_log_path: Path | None = None
+
+
+def set_log_file(path: Path):
+    """设置日志文件路径。设置后 _log 会同时写入该文件。"""
+    global _log_path
+    _log_path = Path(path)
+    _log_path.parent.mkdir(parents=True, exist_ok=True)
+
+
 def _log(message: str):
     now = datetime.now().strftime('%H:%M:%S')
-    print(f'[{now}] {message}')
+    line = f'[{now}] {message}'
+    print(line)
+    if _log_path is not None:
+        try:
+            with open(_log_path, 'a', encoding='utf-8') as f:
+                f.write(line + '\n')
+        except Exception:
+            pass
 
 
 def _safe_name_from_url(url: str) -> str:
@@ -436,6 +455,10 @@ def fetch_html_with_playwright(
         content_type = ''
         try:
             _log(f'开始打开页面: {url}')
+            # 在 page.goto 之前拦截
+            page.route("**/google-analytics.com/**", lambda route: route.abort())
+            # 监听所有响应，打印状态码
+            page.on("response", lambda response: _log(f"请求: {response.url} -> 状态码: {response.status}"))
             response = page.goto(url, wait_until='domcontentloaded', timeout=max(1000, body_deadline - time.time()) * 1000)
             if response is not None:
                 content_type = response.headers.get('content-type', '')
@@ -647,14 +670,13 @@ def _load_html_cache(start_url: str, outdir: Path):
             continue
         page_url = item.get('url', '')
         html_path = item.get('html_path', '')
-        if not page_url or not html_path:
+        if not page_url:
             continue
-        if Path(html_path).exists():
-            cache.append({
-                'url': page_url,
-                'html_path': html_path,
-                'content_type': item.get('content_type', 'text/html'),
-            })
+        cache.append({
+            'url': page_url,
+            'html_path': html_path,
+            'content_type': item.get('content_type', 'text/html'),
+        })
     return cache
 
 
@@ -688,6 +710,7 @@ def save_site_html(
 
     outdir.mkdir(parents=True, exist_ok=True)
     _failed_dir(outdir).mkdir(parents=True, exist_ok=True)
+    set_log_file(outdir / 'scrape.log')
     root_host = urlparse(start_url).netloc
     visited = set()
     queue = deque()
@@ -864,8 +887,10 @@ def save_site_html(
             if not unlimited_depth and depth >= max_depth:
                 continue
 
+            links = []
             try:
-                links = _extract_links(html, current_url, root_host)
+                if HTML_CONTENT_TYPE_RE.search(content_type):
+                    links = _extract_links(html, current_url, root_host)
             except Exception:
                 links = []
 
