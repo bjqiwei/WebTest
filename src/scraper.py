@@ -633,6 +633,8 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         "  url TEXT PRIMARY KEY,"
         "  html_path TEXT NOT NULL,"
         "  content_type TEXT NOT NULL DEFAULT '',"
+        "  video_count INTEGER NOT NULL DEFAULT -1,"
+        "  image_count INTEGER NOT NULL DEFAULT -1,"
         "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))"
         ")"
     )
@@ -651,6 +653,12 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))"
         ")"
     )
+    # 为已有 pages 表补充 video_count / image_count 字段
+    for col in ('video_count', 'image_count'):
+        try:
+            conn.execute(f"ALTER TABLE pages ADD COLUMN {col} INTEGER NOT NULL DEFAULT -1")
+        except Exception:
+            pass
     conn.commit()
     return conn
 
@@ -781,7 +789,7 @@ def save_site_html(
     queue = deque()
     failed_pages: list = _load_failed_pages_from_db(start_url, outdir)
     failed_urls: set = {p['url'] for p in failed_pages}
-    _log(f'Loaded {len(failed_pages)} failed pages from SQLite.')
+    _log(f'Loaded {len(failed_urls)} failed pages from SQLite.')
     html_cache = _load_html_cache_from_db(start_url, outdir)
     _log(f'Loaded {len(html_cache)} cached pages from SQLite.')
     links_cache = _load_links_cache_from_db(start_url, outdir)
@@ -837,7 +845,7 @@ def save_site_html(
                     page_url,
                     html,
                     _failed_dir(outdir),
-                    page_index=len(failed_pages) + 1,
+                    page_index=len(failed_urls) + 1,
                     timestamp=timestamp,
                 )
             except Exception:
@@ -847,7 +855,6 @@ def save_site_html(
             'reason': reason,
             'html_path': failed_html_path,
         }
-        failed_pages.append(entry)
         dirty_failed.append(entry)
         failed_urls.add(page_url)
 
@@ -1003,7 +1010,7 @@ def save_site_html(
         'saved_count': len(html_cache),
         'pages': html_cache,
     }
-    result['failed_count'] = len(failed_pages)
+    result['failed_count'] = len(failed_urls)
     result['summary_path'] = str(manifest_path)
     return result
 
