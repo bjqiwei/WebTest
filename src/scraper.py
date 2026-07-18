@@ -614,41 +614,6 @@ def _failed_dir(outdir: Path) -> Path:
     return outdir / 'failed'
 
 
-def _failed_pages_path(start_url: str, outdir: Path) -> Path:
-    return _failed_dir(outdir) / f"{_safe_name_from_url(start_url)}_failed_pages.json"
-
-
-def _load_failed_pages(start_url: str, outdir: Path):
-    failed_path = _failed_pages_path(start_url, outdir)
-    if not failed_path.exists():
-        legacy_path = outdir / f"{_safe_name_from_url(start_url)}_failed_pages.json"
-        failed_path = legacy_path if legacy_path.exists() else failed_path
-    if not failed_path.exists():
-        return []
-
-    try:
-        with open(failed_path, 'r', encoding='utf-8') as f:
-            payload = json.load(f)
-    except Exception:
-        return []
-
-    items = payload.get('failed_pages', []) if isinstance(payload, dict) else []
-    return items if isinstance(items, list) else []
-
-
-def _write_failed_pages_manifest(start_url: str, outdir: Path, failed_pages: list):
-    failed_path = _failed_pages_path(start_url, outdir)
-    failed_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        'start_url': start_url,
-        'failed_count': len(failed_pages),
-        'failed_pages': failed_pages,
-    }
-    with open(failed_path, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    return str(failed_path)
-
-
 def _manifest_path(start_url: str, outdir: Path) -> Path:
     """最终生成的 manifest JSON 路径（供 analyze_saved_html 消费）。"""
     return outdir / f"{_safe_name_from_url(start_url)}_cache.json"
@@ -660,7 +625,7 @@ def _scrape_db_path(start_url: str, outdir: Path) -> Path:
 
 
 def _init_db(db_path: Path) -> sqlite3.Connection:
-    """打开（或创建）scrape 数据库，创建 pages 和 links 两张表，返回连接对象。"""
+    """打开（或创建）scrape 数据库，创建 pages、links 和 failed_pages 三张表，返回连接对象。"""
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(
@@ -676,6 +641,15 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         "  links TEXT NOT NULL"
         ")"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS failed_pages ("
+        "  url TEXT PRIMARY KEY,"
+        "  reason TEXT NOT NULL,"
+        "  html_path TEXT NOT NULL DEFAULT '',"
+        "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))"
+        ")"
+    )
+    conn.execute("DELETE FROM failed_pages")
     conn.commit()
     return conn
 
@@ -744,6 +718,24 @@ def _flush_links_batch(conn: sqlite3.Connection, entries: dict):
         pass
 
 
+def _flush_failed_pages_batch(conn: sqlite3.Connection, failed_pages: list):
+    """批量追加写入失败页面记录到 SQLite（INSERT OR REPLACE，使用已有连接）。"""
+    if not failed_pages:
+        return
+    try:
+        rows = [
+            (p['url'], p['reason'], p.get('html_path', ''))
+            for p in failed_pages
+        ]
+        conn.executemany(
+            "INSERT OR REPLACE INTO failed_pages (url, reason, html_path) VALUES (?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+
 def save_site_html(
     url: str,
     outdir: Path,
@@ -788,8 +780,8 @@ def save_site_html(
             continue
         # 优先从 links_cache 读取，否则回退到解析 HTML
         links = links_cache.get(cached_url, [])
+        cached_html_path = Path(cached['html_path'])
         if not links:
-            cached_html_path = Path(cached['html_path'])
             try:
                 _log(f'Processing cached URL: {cached_url}')
                 cached_html = cached_html_path.read_text(encoding='utf-8')
@@ -797,13 +789,14 @@ def save_site_html(
                 dirty_links[cached_url] = links
             except Exception:
                 links = []
-        visited.add(cached_url)
-        # 从 URL 路径解析深度（path 分段数），新链接 depth + 1
-        cached_path = urlparse(cached_url).path.strip('/')
-        cached_depth = len(cached_path.split('/')) if cached_path else 0
-        for link in links:
-            if link not in visited:
-                queue.append((link, cached_depth + 1))
+        if cached_html_path.exists():
+            visited.add(cached_url)
+            # 从 URL 路径解析深度（path 分段数），新链接 depth + 1
+            cached_path = urlparse(cached_url).path.strip('/')
+            cached_depth = len(cached_path.split('/')) if cached_path else 0
+            for link in links:
+                if link not in visited:
+                    queue.append((link, cached_depth + 1))
 
     # 如果 start_url 不在缓存中，加入队列
     if start_url not in visited:
@@ -832,7 +825,6 @@ def save_site_html(
                 'html_path': failed_html_path,
             }
         )
-        _write_failed_pages_manifest(start_url, outdir, failed_pages)
 
     def _fetch_one(item):
         page_url, _depth = item
@@ -960,11 +952,15 @@ def save_site_html(
         dirty_html.clear()
         _flush_links_batch(conn, dirty_links)
         dirty_links.clear()
+        _flush_failed_pages_batch(conn, failed_pages)
+        failed_pages.clear()
 
     _flush_html_batch(conn, dirty_html)
     dirty_html.clear()
     _flush_links_batch(conn, dirty_links)
     dirty_links.clear()
+    _flush_failed_pages_batch(conn, failed_pages)
+    failed_pages.clear()
     conn.close()
     # 写入最终 manifest JSON 供 analyze_saved_html 消费
     manifest_path = _manifest_path(start_url, outdir)
@@ -984,7 +980,6 @@ def save_site_html(
     }
     result['failed_count'] = len(failed_pages)
     result['summary_path'] = str(manifest_path)
-    result['failed_pages_path'] = str(_failed_pages_path(start_url, outdir))
     return result
 
 

@@ -290,14 +290,18 @@ def test_scrape_site_persists_failed_fetch_pages(tmp_path, monkeypatch):
     result = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=1, max_pages=10)
 
     assert result['failed_count'] == 1
-    assert result.get('failed_pages_path')
-
-    failed_manifest = json.loads(Path(result['failed_pages_path']).read_text(encoding='utf-8'))
-    assert failed_manifest['failed_count'] == 1
-    failed_item = failed_manifest['failed_pages'][0]
-    assert failed_item['url'] == 'https://example.com/bad.html'
-    assert failed_item['index'] == 1
-    assert 'network down' in failed_item['reason']
+    # 从 SQLite 查询失败页面记录
+    import sqlite3
+    from src.scraper import _scrape_db_path
+    db_path = _scrape_db_path('https://example.com', tmp_path)
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.execute("SELECT url, reason FROM failed_pages")
+    rows = list(cursor)
+    conn.close()
+    assert len(rows) == 1
+    failed_url, failed_reason = rows[0]
+    assert failed_url == 'https://example.com/bad.html'
+    assert 'network down' in failed_reason
 
 
 def test_fetch_html_auto_fallback_to_playwright(monkeypatch):
