@@ -766,7 +766,7 @@ def save_site_html(
     root_host = urlparse(start_url).netloc
     visited = set()
     queue = deque()
-    failed_pages = _load_failed_pages(start_url, outdir)
+    failed_pages: list = []  # 仅记录当次运行的失败，启动时不加载历史
     html_cache = _load_html_cache_from_db(start_url, outdir)
     _log(f'Loaded {len(html_cache)} cached pages from SQLite.')
     links_cache = _load_links_cache_from_db(start_url, outdir)
@@ -827,7 +827,6 @@ def save_site_html(
                 failed_html_path = ''
         failed_pages.append(
             {
-                'index': len(failed_pages) + 1,
                 'url': page_url,
                 'reason': reason,
                 'html_path': failed_html_path,
