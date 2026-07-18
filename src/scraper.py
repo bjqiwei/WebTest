@@ -632,13 +632,15 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS pages ("
         "  url TEXT PRIMARY KEY,"
         "  html_path TEXT NOT NULL,"
-        "  content_type TEXT NOT NULL DEFAULT ''"
+        "  content_type TEXT NOT NULL DEFAULT '',"
+        "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))"
         ")"
     )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS links ("
         "  url TEXT PRIMARY KEY,"
-        "  links TEXT NOT NULL"
+        "  links TEXT NOT NULL,"
+        "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))"
         ")"
     )
     conn.execute(
@@ -649,7 +651,6 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))"
         ")"
     )
-    conn.execute("DELETE FROM failed_pages")
     conn.commit()
     return conn
 
@@ -718,14 +719,14 @@ def _flush_links_batch(conn: sqlite3.Connection, entries: dict):
         pass
 
 
-def _flush_failed_pages_batch(conn: sqlite3.Connection, failed_pages: list):
+def _flush_failed_pages_batch(conn: sqlite3.Connection, entries: list):
     """批量追加写入失败页面记录到 SQLite（INSERT OR REPLACE，使用已有连接）。"""
-    if not failed_pages:
+    if not entries:
         return
     try:
         rows = [
             (p['url'], p['reason'], p.get('html_path', ''))
-            for p in failed_pages
+            for p in entries
         ]
         conn.executemany(
             "INSERT OR REPLACE INTO failed_pages (url, reason, html_path) VALUES (?, ?, ?)",
@@ -734,6 +735,26 @@ def _flush_failed_pages_batch(conn: sqlite3.Connection, failed_pages: list):
         conn.commit()
     except Exception:
         pass
+
+
+def _load_failed_pages_from_db(start_url: str, outdir: Path) -> list:
+    """从 SQLite 加载历史失败页面列表。"""
+    db_path = _scrape_db_path(start_url, outdir)
+    if not db_path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.execute(
+            "SELECT url, reason, html_path FROM failed_pages ORDER BY rowid"
+        )
+        result = [
+            {'url': url, 'reason': reason, 'html_path': html_path}
+            for url, reason, html_path in cursor
+        ]
+        conn.close()
+        return result
+    except Exception:
+        return []
 
 
 def save_site_html(
@@ -758,7 +779,9 @@ def save_site_html(
     root_host = urlparse(start_url).netloc
     visited = set()
     queue = deque()
-    failed_pages: list = []  # 仅记录当次运行的失败，启动时不加载历史
+    failed_pages: list = _load_failed_pages_from_db(start_url, outdir)
+    failed_urls: set = {p['url'] for p in failed_pages}
+    _log(f'Loaded {len(failed_pages)} failed pages from SQLite.')
     html_cache = _load_html_cache_from_db(start_url, outdir)
     _log(f'Loaded {len(html_cache)} cached pages from SQLite.')
     links_cache = _load_links_cache_from_db(start_url, outdir)
@@ -767,6 +790,7 @@ def save_site_html(
     _log(f'Initialized SQLite database at {_scrape_db_path(start_url, outdir)}.')
     dirty_html: list = []  # 自上次 flush 后新增的页面记录
     dirty_links: dict = {}  # 记录自上次 flush 后变更的 url -> links
+    dirty_failed: list = []  # 自上次 flush 后新增的失败页面记录
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
 
     # 从本地缓存恢复：优先使用 links_cache 避免重新解析 HTML
@@ -795,11 +819,11 @@ def save_site_html(
             cached_path = urlparse(cached_url).path.strip('/')
             cached_depth = len(cached_path.split('/')) if cached_path else 0
             for link in links:
-                if link not in visited:
+                if link not in visited and link not in failed_urls:
                     queue.append((link, cached_depth + 1))
 
     # 如果 start_url 不在缓存中，加入队列
-    if start_url not in visited:
+    if start_url not in visited and start_url not in failed_urls:
         queue.appendleft((start_url, 0))
     unlimited_depth = max_depth < 0
     unlimited_pages = max_pages <= 0
@@ -818,13 +842,14 @@ def save_site_html(
                 )
             except Exception:
                 failed_html_path = ''
-        failed_pages.append(
-            {
-                'url': page_url,
-                'reason': reason,
-                'html_path': failed_html_path,
-            }
-        )
+        entry = {
+            'url': page_url,
+            'reason': reason,
+            'html_path': failed_html_path,
+        }
+        failed_pages.append(entry)
+        dirty_failed.append(entry)
+        failed_urls.add(page_url)
 
     def _fetch_one(item):
         page_url, _depth = item
@@ -945,22 +970,22 @@ def save_site_html(
                 links = []
 
             for link in links:
-                if link not in visited:
+                if link not in visited and link not in failed_urls:
                     queue.append((link, depth + 1))
 
         _flush_html_batch(conn, dirty_html)
         dirty_html.clear()
         _flush_links_batch(conn, dirty_links)
         dirty_links.clear()
-        _flush_failed_pages_batch(conn, failed_pages)
-        failed_pages.clear()
+        _flush_failed_pages_batch(conn, dirty_failed)
+        dirty_failed.clear()
 
     _flush_html_batch(conn, dirty_html)
     dirty_html.clear()
     _flush_links_batch(conn, dirty_links)
     dirty_links.clear()
-    _flush_failed_pages_batch(conn, failed_pages)
-    failed_pages.clear()
+    _flush_failed_pages_batch(conn, dirty_failed)
+    dirty_failed.clear()
     conn.close()
     # 写入最终 manifest JSON 供 analyze_saved_html 消费
     manifest_path = _manifest_path(start_url, outdir)
