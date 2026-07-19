@@ -373,6 +373,8 @@ def _is_challenge_or_block_page(html: str) -> bool:
         '正在进行安全验证',
         '请验证您是真人',
         '安全服务防护恶意自动程序',
+        '403 error: page not available',
+        '404 error: page not found',
     )
     # Do not treat generic "cloudflare" mentions as challenge pages;
     # many normal sites include Cloudflare assets and would be false positives.
