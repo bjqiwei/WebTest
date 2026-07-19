@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime
 import hashlib
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import Path
 import time
 from urllib.parse import urldefrag, urljoin, urlparse, unquote
@@ -836,12 +836,12 @@ def save_site_html(
                 links = []
         if cached_html_path.exists():
             visited.add(cached_url)
-            # 从 URL 路径解析深度（path 分段数），新链接 depth + 1
-            cached_path = urlparse(cached_url).path.strip('/')
-            cached_depth = len(cached_path.split('/')) if cached_path else 0
             for link in links:
                 if link not in visited and link not in failed_urls:
-                    queue.append((link, cached_depth + 1))
+                    # 从 URL 路径解析深度（path 分段数)
+                    cached_path = urlparse(link).path.strip('/')
+                    cached_depth = len(cached_path.split('/')) if cached_path else 0
+                    queue.append((link, cached_depth))
 
     # 如果 start_url 不在缓存中，加入队列
     if start_url not in visited and start_url not in failed_urls:
@@ -911,101 +911,112 @@ def save_site_html(
     if callable(phase_callback):
         phase_callback('saving_html')
 
-    while queue and (unlimited_pages or len(html_cache) < max_pages):
-        if unlimited_pages:
-            per_round = min(max_concurrency, len(queue))
-        else:
-            remaining = max_pages - len(html_cache)
-            if remaining <= 0:
-                break
-            per_round = min(max_concurrency, len(queue), remaining)
+    pending = {}  # {Future: (url, depth)}
 
-        batch = []
-        while queue and len(batch) < per_round:
+    def _try_submit():
+        """从队列取一个 URL 提交到线程池，返回是否成功提交。"""
+        while queue:
+            if not unlimited_pages and len(html_cache) >= max_pages:
+                return False
             current_url, depth = queue.popleft()
+            if not unlimited_depth and depth > max_depth:
+                continue
             if current_url in visited:
                 continue
             if not re.search(r'\.html?$', urlparse(current_url).path, re.IGNORECASE) and '.' in Path(urlparse(current_url).path).suffix:
                 continue
             visited.add(current_url)
-            batch.append((current_url, depth))
+            future = executor.submit(_fetch_one, (current_url, depth))
+            pending[future] = (current_url, depth)
+            _log(f'提交线程: {current_url} (深度 {depth}), 待处理: {len(pending)}')
+            return True
+        return False
 
-        if not batch:
-            _log('No batch to process')
+    def _flush_dirty():
+        if dirty_html or dirty_links or dirty_failed:
+            _log(f'批量保存到 SQLite: {len(dirty_html)} HTML, {len(dirty_links)} links, {len(dirty_failed)} failed')
+            _flush_html_batch(conn, dirty_html)
+            dirty_html.clear()
+            _flush_links_batch(conn, dirty_links)
+            dirty_links.clear()
+            _flush_failed_pages_batch(conn, dirty_failed)
+            dirty_failed.clear()
 
-        result_by_url = {}
+    with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+        # 初始填满线程池
+        while len(pending) < max_concurrency:
+            if not _try_submit():
+                break
 
-        if batch:
-            worker_count = min(max_concurrency, len(batch))
-            with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                fetched_results = list(executor.map(_fetch_one, batch))
-            for item in fetched_results:
-                result_by_url[item['url']] = item
+        while pending:
+            # 等待至少一个线程完成
+            done, _ = wait(pending.keys(), return_when=FIRST_COMPLETED)
 
-        for current_url, depth in batch:
-            item = result_by_url.get(current_url)
-            if not item:
-                _log(f'未获取到页面: {current_url}')
-                continue
+            for future in done:
+                current_url, depth = pending.pop(future)
+                item = future.result()
 
-            html = item.get('html', '')
-            html_path = item.get('html_path', '')
-            fetch_error = item.get('error', '')
-            content_type = item.get('content_type', '')
-
-            if fetch_error or not content_type:
-                _log(f'抓取页面失败: {current_url}, 错误: {fetch_error}')
-                _append_failed(current_url, fetch_error, html)
-                continue
-
-            if HTML_CONTENT_TYPE_RE.search(content_type) and _is_challenge_or_block_page(html):
-                _log(f'挑战或封锁页面: {current_url}')
-                _append_failed(current_url, 'challenge_or_block', html)
-                continue
-
-            if HTML_CONTENT_TYPE_RE.search(content_type) and not _is_html_document(html):
-                _log(f'非 HTML 文档: {current_url}')
-                _append_failed(current_url, 'not_html_document', html)
-                continue
-
-            
-            if HTML_CONTENT_TYPE_RE.search(content_type):
-                page_index = len(html_cache) + 1
-                _log(f"正在保存 HTML: {current_url} (深度 {depth}, 页面索引 {page_index})")
-                try:
-                    html_path = _save_html_snapshot(
-                        current_url,
-                        html,
-                        outdir,
-                        page_index=page_index,
-                        timestamp=timestamp,
-                    )
-                except Exception as e:
-                    _log(f'保存 HTML 失败: {current_url}, 错误: {e}')
+                if not item:
+                    _log(f'未获取到页面: {current_url}')
                     continue
 
-            html_cache.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
-            dirty_html.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
+                html = item.get('html', '')
+                fetch_error = item.get('error', '')
+                content_type = item.get('content_type', '')
 
-            links = item.get('links', None)
-            if HTML_CONTENT_TYPE_RE.search(content_type) and links is not None:
-                dirty_links[current_url] = links
+                if fetch_error or not content_type:
+                    _log(f'抓取页面失败: {current_url}, 错误: {fetch_error}')
+                    _append_failed(current_url, fetch_error, html)
+                    continue
 
-            if not unlimited_depth and depth >= max_depth:
-                continue
+                if HTML_CONTENT_TYPE_RE.search(content_type) and _is_challenge_or_block_page(html):
+                    _log(f'挑战或封锁页面: {current_url}')
+                    _append_failed(current_url, 'challenge_or_block', html)
+                    continue
 
-            if links:
-                for link in links:
-                    if link not in visited and link not in failed_urls:
-                        queue.append((link, depth + 1))
+                if HTML_CONTENT_TYPE_RE.search(content_type) and not _is_html_document(html):
+                    _log(f'非 HTML 文档: {current_url}')
+                    _append_failed(current_url, 'not_html_document', html)
+                    continue
 
-        _flush_html_batch(conn, dirty_html)
-        dirty_html.clear()
-        _flush_links_batch(conn, dirty_links)
-        dirty_links.clear()
-        _flush_failed_pages_batch(conn, dirty_failed)
-        dirty_failed.clear()
+                if HTML_CONTENT_TYPE_RE.search(content_type):
+                    page_index = len(html_cache) + 1
+                    _log(f"正在保存 HTML: {current_url} (深度 {depth}, 页面索引 {page_index})")
+                    try:
+                        html_path = _save_html_snapshot(
+                            current_url,
+                            html,
+                            outdir,
+                            page_index=page_index,
+                            timestamp=timestamp,
+                        )
+                    except Exception as e:
+                        _log(f'保存 HTML 失败: {current_url}, 错误: {e}')
+                        continue
 
+                html_cache.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
+                dirty_html.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
+
+                links = item.get('links', None)
+                if HTML_CONTENT_TYPE_RE.search(content_type) and links is not None:
+                    dirty_links[current_url] = links
+
+                if links:
+                    for link in links:
+                        if link not in visited and link not in failed_urls:
+                            cached_path = urlparse(link).path.strip('/')
+                            cached_depth = len(cached_path.split('/')) if cached_path else 0
+                            queue.append((link, cached_depth))
+
+            _flush_dirty()
+            # 此线程完成，有空闲槽位，立即提交新任务
+            while len(pending) < max_concurrency:
+                if not _try_submit():
+                    break
+
+            
+
+    # 最终刷写
     _flush_html_batch(conn, dirty_html)
     dirty_html.clear()
     _flush_links_batch(conn, dirty_links)
