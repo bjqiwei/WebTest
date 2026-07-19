@@ -641,7 +641,7 @@ def _manifest_path(start_url: str, outdir: Path) -> Path:
 
 
 def _scrape_db_path(start_url: str, outdir: Path) -> Path:
-    """合并后的 SQLite 数据库路径（含 pages 和 links 两个表）。"""
+    """合并后的 SQLite 数据库路径（含 pages 和 failed_pages 两张表）。"""
     return outdir / f"{_safe_name_from_url(start_url)}_scrape.db"
 
 
@@ -654,15 +654,9 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         "  url TEXT PRIMARY KEY,"
         "  html_path TEXT NOT NULL,"
         "  content_type TEXT NOT NULL DEFAULT '',"
+        "  links TEXT DEFAULT NULL,"
         "  video_count INTEGER NOT NULL DEFAULT -1,"
         "  image_count INTEGER NOT NULL DEFAULT -1,"
-        "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))"
-        ")"
-    )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS links ("
-        "  url TEXT PRIMARY KEY,"
-        "  links TEXT NOT NULL,"
         "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))"
         ")"
     )
@@ -674,10 +668,13 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))"
         ")"
     )
-    # 为已有 pages 表补充 video_count / image_count 字段
-    for col in ('video_count', 'image_count'):
+    # 为已有 pages 表补充新增字段
+    for col in ('video_count', 'image_count', 'links'):
         try:
-            conn.execute(f"ALTER TABLE pages ADD COLUMN {col} INTEGER NOT NULL DEFAULT -1")
+            if col == 'links':
+                conn.execute(f"ALTER TABLE pages ADD COLUMN {col} TEXT DEFAULT NULL")
+            else:
+                conn.execute(f"ALTER TABLE pages ADD COLUMN {col} INTEGER NOT NULL DEFAULT -1")
         except Exception:
             pass
     conn.commit()
@@ -716,14 +713,14 @@ def _flush_html_batch(conn: sqlite3.Connection, entries: list):
 
 
 def _load_links_cache_from_db(start_url: str, outdir: Path) -> dict:
-    """从 SQLite 加载全部链接缓存到内存 dict。"""
+    """从 SQLite pages 表加载全部链接缓存到内存 dict。"""
     db_path = _scrape_db_path(start_url, outdir)
     if not db_path.exists():
         return {}
     try:
         conn = sqlite3.connect(str(db_path))
         conn.execute("PRAGMA journal_mode=WAL")
-        cursor = conn.execute("SELECT url, links FROM links")
+        cursor = conn.execute("SELECT url, links FROM pages where links IS NOT NULL")
         result = {}
         for url, links_json in cursor:
             try:
@@ -737,12 +734,12 @@ def _load_links_cache_from_db(start_url: str, outdir: Path) -> dict:
 
 
 def _flush_links_batch(conn: sqlite3.Connection, entries: dict):
-    """批量写（INSERT OR REPLACE）脏 URL 的链接列表到 SQLite。"""
+    """批量更新 pages 表中的链接列表。"""
     if not entries:
         return
     try:
-        rows = [(url, json.dumps(links, ensure_ascii=False)) for url, links in entries.items()]
-        conn.executemany("INSERT OR REPLACE INTO links (url, links) VALUES (?, ?)", rows)
+        rows = [(json.dumps(links, ensure_ascii=False), url) for url, links in entries.items()]
+        conn.executemany("UPDATE pages SET links = ? WHERE url = ?", rows)
         conn.commit()
     except Exception:
         pass
@@ -815,7 +812,7 @@ def save_site_html(
     _log(f'Loaded {len(html_cache)} cached pages from SQLite.')
     links_cache = _load_links_cache_from_db(start_url, outdir)
     _log(f'Loaded {len(links_cache)} cached links from SQLite.')
-    conn = _init_db(_scrape_db_path(start_url, outdir))  # 单个持久连接，含 pages + links 两张表
+    conn = _init_db(_scrape_db_path(start_url, outdir))  # 单个持久连接，含 pages + failed_pages 两张表
     _log(f'Initialized SQLite database at {_scrape_db_path(start_url, outdir)}.')
     dirty_html: list = []  # 自上次 flush 后新增的页面记录
     dirty_links: dict = {}  # 记录自上次 flush 后变更的 url -> links
@@ -839,10 +836,10 @@ def save_site_html(
                 _log(f'Processing cached URL: {cached_url}')
                 cached_html = cached_html_path.read_text(encoding='utf-8')
                 # 遇到links!=[]的并且是block/challenge页面的情况，并不会执行到这里，需要单独写个程序洗出 block/challenge页面的缓存
-                #if _is_challenge_or_block_page(cached_html):
-                #    _log(f'Cached HTML is a challenge/block page: {cached_url}')
-                #    cached_html_path.unlink(missing_ok=True)
-                #    continue
+                if _is_challenge_or_block_page(cached_html):
+                    _log(f'Cached HTML is a challenge/block page: {cached_url}')
+                    cached_html_path.unlink(missing_ok=True)
+                    continue
                 links = _extract_links(cached_html, cached_url, root_host)
                 dirty_links[cached_url] = links
             except Exception:
