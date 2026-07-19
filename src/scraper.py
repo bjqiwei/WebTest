@@ -452,7 +452,7 @@ def fetch_html_with_playwright(
             try:
                 browser = p.chromium.connect_over_cdp(cdp_url)
             except Exception as e:
-                _log(f'CDP连接失败: {e}，正在重新启动 Chrome...')
+                _log(f'CDP连接失败: {e}，请重新启动 Chrome...')
                 raise
             if browser.contexts:
                 context = browser.contexts[0]
@@ -883,12 +883,20 @@ def save_site_html(
             )
             html_text = fetch_result['html']
             content_type = fetch_result.get('content_type', '')
+            # 在线程内提取链接，避免主线程串行解析
+            links = None
+            if HTML_CONTENT_TYPE_RE.search(content_type):
+                try:
+                    links = _extract_links(html_text, page_url, root_host)
+                except Exception:
+                    links = None
             return {
                 'url': page_url,
                 'html': html_text,
                 'html_path': '',
                 'error': '',
                 'content_type': content_type,
+                'links': links,
             }
         except Exception as exc:
             return {
@@ -897,6 +905,7 @@ def save_site_html(
                 'html_path': '',
                 'error': str(exc),
                 'content_type': '',
+                'links': None,
             }
 
     if callable(phase_callback):
@@ -978,20 +987,17 @@ def save_site_html(
             html_cache.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
             dirty_html.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
 
+            links = item.get('links', None)
+            if HTML_CONTENT_TYPE_RE.search(content_type) and links is not None:
+                dirty_links[current_url] = links
+
             if not unlimited_depth and depth >= max_depth:
                 continue
 
-            links = []
-            try:
-                if HTML_CONTENT_TYPE_RE.search(content_type):
-                    links = _extract_links(html, current_url, root_host)
-                    dirty_links[current_url] = links
-            except Exception:
-                links = []
-
-            for link in links:
-                if link not in visited and link not in failed_urls:
-                    queue.append((link, depth + 1))
+            if links:
+                for link in links:
+                    if link not in visited and link not in failed_urls:
+                        queue.append((link, depth + 1))
 
         _flush_html_batch(conn, dirty_html)
         dirty_html.clear()
