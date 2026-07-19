@@ -821,7 +821,7 @@ def save_site_html(
         # 优先从 links_cache 读取，否则回退到解析 HTML
         links = links_cache.get(cached_url, None)
         cached_html_path = Path(cached['html_path'])
-        if links is not None and links:
+        if links is None:
             try:
                 _log(f'Processing cached URL: {cached_url}')
                 cached_html = cached_html_path.read_text(encoding='utf-8')
