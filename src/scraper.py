@@ -65,33 +65,41 @@ def _log(message: str):
             pass
 
 
-def _safe_name_from_url(url: str) -> str:
+def _safe_name_from_url(url: str, max_len: int = 120) -> str:
     p = urlparse(url)
     host = p.netloc.replace(':', '_')
     path = _sanitize_filename_component(unquote(p.path.strip('/').replace('/', '_')) or '')
     raw_query = unquote(re.sub(r'[^a-zA-Z0-9]+', '_', p.query).strip('_'))
     query = _sanitize_filename_component(raw_query) if raw_query else ''
     if path and query:
-        return f"{host}_{path}_{query}"
-    if path:
-        return f"{host}_{path}"
-    if query:
-        return f"{host}_{query}"
-    return host
+        name = f"{host}_{path}_{query}"
+    elif path:
+        name = f"{host}_{path}"
+    elif query:
+        name = f"{host}_{query}"
+    else:
+        name = host
+    if len(name) > max_len:
+        name = name[:max_len].rstrip('_')
+    return name
 
 
-def _path_name_from_url(url: str) -> str:
+def _path_name_from_url(url: str, max_len: int = 120) -> str:
     p = urlparse(url)
     path = _sanitize_filename_component(unquote(p.path.strip('/').replace('/', '_')) or '')
     raw_query = unquote(re.sub(r'[^a-zA-Z0-9]+', '_', p.query).strip('_'))
     query = _sanitize_filename_component(raw_query) if raw_query else ''
     if path and query:
-        return f"{path}_{query}"
-    if path:
-        return path
-    if query:
-        return query
-    return 'index'
+        name = f"{path}_{query}"
+    elif path:
+        name = path
+    elif query:
+        name = query
+    else:
+        name = 'index'
+    if len(name) > max_len:
+        name = name[:max_len].rstrip('_')
+    return name
 
 
 def _sanitize_filename_component(value: str) -> str:
