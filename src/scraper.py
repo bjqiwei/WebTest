@@ -451,18 +451,6 @@ def fetch_html_with_playwright(
                 browser = p.chromium.connect_over_cdp(cdp_url)
             except Exception as e:
                 _log(f'CDP连接失败: {e}，正在重新启动 Chrome...')
-                try:
-                    subprocess.run(
-                        [
-                            'chrome.exe',
-                            '--remote-debugging-port=9222',
-                            '--user-data-dir=d:\\chrome-cdp-profile',
-                        ],
-                        check=False,
-                    )
-                    time.sleep(5)
-                except Exception as launch_err:
-                    _log(f'重启 Chrome 失败: {launch_err}')
                 raise
             if browser.contexts:
                 context = browser.contexts[0]
@@ -829,9 +817,9 @@ def save_site_html(
             _log(f'跳过非 HTML 缓存 URL: {cached_url} (content_type={ctype})')
             continue
         # 优先从 links_cache 读取，否则回退到解析 HTML
-        links = links_cache.get(cached_url, [])
+        links = links_cache.get(cached_url, None)
         cached_html_path = Path(cached['html_path'])
-        if not links:
+        if links is not None and links:
             try:
                 _log(f'Processing cached URL: {cached_url}')
                 cached_html = cached_html_path.read_text(encoding='utf-8')
