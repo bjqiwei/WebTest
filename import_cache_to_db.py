@@ -131,7 +131,6 @@ def import_cache_to_db(outdir: Path):
     conn.commit()
     print(f'  pages 写入完成: {len(page_rows)} 条')
 
-    return
     # 2) 读取 HTML 提取链接，写入 links 表
     print('正在提取链接并写入 links 表...')
     link_count = 0
