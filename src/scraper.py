@@ -429,8 +429,7 @@ def _is_challenge_or_block_page(html: str) -> bool:
         '正在进行安全验证',
         '请验证您是真人',
         '安全服务防护恶意自动程序',
-        '403 error: page not available',
-        '404 error: page not found',
+        '403 error: page not available'
     )
     # Do not treat generic "cloudflare" mentions as challenge pages;
     # many normal sites include Cloudflare assets and would be false positives.
@@ -537,41 +536,26 @@ def fetch_html_with_playwright(
         return page.content(), ctype
 
     use_cdp = bool(cdp_url)
-    if use_cdp:
-        # CDP：复用 thread-local browser + context，只开/关 tab
-        browser = _get_thread_browser(cdp_url, headless)
-        context = _get_thread_context(cdp_url, headless)
-        page = context.new_page()
-        html = ''
-        content_type = ''
-        try:
-            html, content_type = _navigate_and_capture(page, url, body_deadline, wait_seconds)
-            _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
-        except Exception as e:
-            _log(f'抓取页面异常: {url}, 错误: {e}')
-            raise
-        finally:
-            page.close()
-            _log(f'CDP tab已关闭: {url}')
-    else:
-        # 非 CDP：每次独立启动/关闭，不缓存
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=headless)
-            context = browser.new_context(ignore_https_errors=True, user_agent=DEFAULT_USER_AGENT)
-            page = context.new_page()
-            html = ''
-            content_type = ''
-            try:
-                html, content_type = _navigate_and_capture(page, url, body_deadline, wait_seconds)
-                _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
-            except Exception as e:
-                _log(f'抓取页面异常: {url}, 错误: {e}')
-                raise
-            finally:
-                page.close()
-                context.close()
-                browser.close()
-                _log(f'浏览器已关闭: {url}')
+
+    # CDP：复用 thread-local browser + context，只开/关 tab
+    browser = _get_thread_browser(cdp_url, headless)
+    context = _get_thread_context(cdp_url, headless)
+    page = context.new_page()
+    html = ''
+    content_type = ''
+    try:
+        html, content_type = _navigate_and_capture(page, url, body_deadline, wait_seconds)
+        _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
+    except Exception as e:
+        _log(f'抓取页面异常: {url}, 错误: {e}')
+        raise
+    finally:
+        page.close()
+        _log(f'CDP tab已关闭: {url}')
+        if not use_cdp:
+            context.close()
+            _log(f'浏览器已关闭: {url}')
+
     return {'html': html, 'content_type': content_type}
 
 
