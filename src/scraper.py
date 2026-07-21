@@ -11,6 +11,8 @@ from pathlib import Path
 import time
 from urllib.parse import urldefrag, urljoin, urlparse, unquote
 
+import threading
+
 import subprocess
 
 import requests
@@ -44,6 +46,53 @@ DEFAULT_USER_AGENT = (
 
 
 _log_path: Path | None = None
+
+# 每个线程独立的 Playwright + Browser 缓存（Playwright 同步 API 非线程安全）
+_thread_local = threading.local()
+
+
+def _get_thread_browser(cdp_url: str = '', headless: bool = True):
+    """获取当前线程的 Playwright browser 实例。每个线程独立一个，避免 greenlet 冲突。"""
+    if hasattr(_thread_local, 'browser') and _thread_local.browser is not None:
+        try:
+            _thread_local.browser.contexts  # 探活
+            return _thread_local.browser
+        except Exception:
+            _thread_local.browser = None
+
+    if not hasattr(_thread_local, 'playwright') or _thread_local.playwright is None:
+        _thread_local.playwright = sync_playwright().start()
+
+    if cdp_url:
+        _log(f'线程内通过CDP连接Chrome: {cdp_url}')
+        _thread_local.browser = _thread_local.playwright.chromium.connect_over_cdp(cdp_url)
+    else:
+        _log('线程内启动本地 Playwright 浏览器')
+        _thread_local.browser = _thread_local.playwright.chromium.launch(headless=headless)
+    return _thread_local.browser
+
+
+def _get_thread_context(cdp_url: str = '', headless: bool = True):
+    """获取当前线程共享的 browser context。
+    CDP 模式复用浏览器已有 context（browser.contexts[0]），这样 page 是现有窗口中的 tab。
+    每个线程通过自己独立的 CDP 连接访问，避免 greenlet 冲突。
+    """
+    if hasattr(_thread_local, 'context') and _thread_local.context is not None:
+        try:
+            _thread_local.context.pages  # 探活
+            return _thread_local.context
+        except Exception:
+            _thread_local.context = None
+
+    browser = _get_thread_browser(cdp_url, headless)
+    if cdp_url and browser.contexts:
+        # 复用浏览器已有的默认 context（= 现有 Chrome 窗口），只开 tab 不开新窗口
+        _thread_local.context = browser.contexts[0]
+    else:
+        _thread_local.context = browser.new_context(
+            ignore_https_errors=True, user_agent=DEFAULT_USER_AGENT
+        )
+    return _thread_local.context
 
 
 def set_log_file(path: Path):
@@ -452,85 +501,74 @@ def fetch_html_with_playwright(
 
     body_deadline = time.time() + max(float(timeout), 10.0)
 
-    with sync_playwright() as p:
-        use_cdp = bool(cdp_url)
-        if use_cdp:
-            _log(f'通过CDP连接Chrome: {cdp_url}')
-            try:
-                browser = p.chromium.connect_over_cdp(cdp_url)
-            except Exception as e:
-                _log(f'CDP连接失败: {e}，请重新启动 Chrome...')
-                raise
-            if browser.contexts:
-                context = browser.contexts[0]
-            else:
-                context = browser.new_context(ignore_https_errors=True, user_agent=DEFAULT_USER_AGENT)
+    def _navigate_and_capture(page, url, body_deadline, wait_seconds):
+        """在已打开的 page 上导航并捕获 HTML。返回 (html, content_type)。"""
+        _log(f'开始打开页面: {url}')
+        page.route("**/google-analytics.com/**", lambda route: route.abort())
+        response = page.goto(url, wait_until='domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
+        ctype = response.headers.get('content-type', '') if response is not None else ''
+
+        try:
+            _log(f'等待 DOM 加载完成: {url} 超时时间: {max(10.0, body_deadline - time.time()):.1f}秒')
+            page.wait_for_load_state('domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
+        except TimeoutError:
+            _log(f'等待 DOM 加载超时: {url}')
+            return '', ctype
+
+        current_html = page.content()
+        settle_wait_seconds = max(float(wait_seconds), 1.0)
+
+        if _is_challenge_or_block_page(current_html):
+            challenge_wait_seconds = max(10.0, settle_wait_seconds)
+            challenge_deadline = time.time() + challenge_wait_seconds
+            _log(f'检测到挑战页，额外最多等待{challenge_wait_seconds:.1f}秒: {url}')
+            while time.time() < challenge_deadline:
+                if _try_click_challenge_checkbox(page):
+                    _log(f'已尝试自动勾选安全验证: {url}')
+                page.wait_for_timeout(1000)
+                current_html = page.content()
+                if not _is_challenge_or_block_page(current_html):
+                    break
         else:
-            browser = p.chromium.launch(headless=headless)
-            context = browser.new_context(ignore_https_errors=True, user_agent=DEFAULT_USER_AGENT)
-        
+            _log(f'未检测到挑战页，额外等待{settle_wait_seconds/2:.1f}秒: {url}')
+            if settle_wait_seconds > 0:
+                time.sleep(settle_wait_seconds / 2)
+
+        return page.content(), ctype
+
+    use_cdp = bool(cdp_url)
+    if use_cdp:
+        # CDP：复用 thread-local browser + context，只开/关 tab
+        browser = _get_thread_browser(cdp_url, headless)
+        context = _get_thread_context(cdp_url, headless)
         page = context.new_page()
         html = ''
         content_type = ''
         try:
-            _log(f'开始打开页面: {url}')
-            # 在 page.goto 之前拦截
-            page.route("**/google-analytics.com/**", lambda route: route.abort())
-            # 监听所有响应，打印状态码
-            #page.on("response", lambda response: _log(f"请求: {response.url} -> 状态码: {response.status}"))
-            response = page.goto(url, wait_until='domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
-            if response is not None:
-                content_type = response.headers.get('content-type', '')
-            else:
-                content_type = ''
-
-            def _capture_current_page_html() -> str:
-
-                # Wait until document body becomes readable.
-                try:
-                    # 等待 DOM 加载完成（body 肯定存在）
-                    _log(f'等待 DOM 加载完成: {url} 超时时间: {max(10.0, body_deadline - time.time()):.1f}秒')
-                    page.wait_for_load_state('domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
-                except TimeoutError:
-                    _log(f'等待 DOM 加载超时: {url}')
-                    return ''
-
-                current_html = page.content()
-
-                # 用户设置的额外等待应精确生效，不再隐式叠加额外秒数。
-                settle_wait_seconds = max(float(wait_seconds), 1.0)
-
-                # Only when a challenge page is detected do we wait longer for verification.
-                if _is_challenge_or_block_page(current_html):
-                    challenge_wait_seconds = max(10.0, settle_wait_seconds)
-                    challenge_deadline = time.time() + challenge_wait_seconds
-                    _log(f'检测到挑战页，额外最多等待{challenge_wait_seconds:.1f}秒: {url}')
-                    while time.time() < challenge_deadline:
-                        if _try_click_challenge_checkbox(page):
-                            _log(f'已尝试自动勾选安全验证: {url}')
-                        page.wait_for_timeout(1000)
-                        current_html = page.content()
-                        if not _is_challenge_or_block_page(current_html):
-                            break
-                else:
-                    _log(f'未检测到挑战页，额外等待{settle_wait_seconds/2:.1f}秒: {url}')
-                    if settle_wait_seconds > 0:
-                        time.sleep(settle_wait_seconds / 2)
-
-                return page.content()
-
-            html = _capture_current_page_html()
-
+            html, content_type = _navigate_and_capture(page, url, body_deadline, wait_seconds)
             _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
         except Exception as e:
             _log(f'抓取页面异常: {url}, 错误: {e}')
             raise
         finally:
             page.close()
-            if use_cdp:
-                # CDP模式：不关闭外部浏览器，只关闭page
-                _log(f'CDP页面已关闭: {url}')
-            else:
+            _log(f'CDP tab已关闭: {url}')
+    else:
+        # 非 CDP：每次独立启动/关闭，不缓存
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=headless)
+            context = browser.new_context(ignore_https_errors=True, user_agent=DEFAULT_USER_AGENT)
+            page = context.new_page()
+            html = ''
+            content_type = ''
+            try:
+                html, content_type = _navigate_and_capture(page, url, body_deadline, wait_seconds)
+                _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
+            except Exception as e:
+                _log(f'抓取页面异常: {url}, 错误: {e}')
+                raise
+            finally:
+                page.close()
                 context.close()
                 browser.close()
                 _log(f'浏览器已关闭: {url}')
