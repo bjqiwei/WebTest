@@ -478,7 +478,7 @@ def fetch_html_with_playwright(
             page.route("**/google-analytics.com/**", lambda route: route.abort())
             # 监听所有响应，打印状态码
             #page.on("response", lambda response: _log(f"请求: {response.url} -> 状态码: {response.status}"))
-            response = page.goto(url, wait_until='domcontentloaded', timeout=max(1.0, body_deadline - time.time()) * 1000)
+            response = page.goto(url, wait_until='domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
             if response is not None:
                 content_type = response.headers.get('content-type', '')
             else:
@@ -489,8 +489,8 @@ def fetch_html_with_playwright(
                 # Wait until document body becomes readable.
                 try:
                     # 等待 DOM 加载完成（body 肯定存在）
-                    _log(f'等待 DOM 加载完成: {url} 超时时间: {max(1.0, body_deadline - time.time()):.1f}秒')
-                    page.wait_for_load_state('domcontentloaded', timeout=max(1.0, body_deadline - time.time()) * 1000)
+                    _log(f'等待 DOM 加载完成: {url} 超时时间: {max(10.0, body_deadline - time.time()):.1f}秒')
+                    page.wait_for_load_state('domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
                 except TimeoutError:
                     _log(f'等待 DOM 加载超时: {url}')
                     return ''
