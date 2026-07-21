@@ -30,6 +30,7 @@ def clean_html_dir(root_dir: Path, dry_run: bool = False):
             print(f'[{idx}/{total}] 读取失败: {fp} ({e})')
             continue
 
+        print(f'[{idx}/{total}] 扫描: {fp}')
         if _is_challenge_or_block_page(html):
             print(f'[{idx}/{total}] 命中特征: {fp}')
             if not dry_run:

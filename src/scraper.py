@@ -643,13 +643,13 @@ def _scrape_db_path(start_url: str, outdir: Path) -> Path:
 
 
 def _init_db(db_path: Path) -> sqlite3.Connection:
-    """打开（或创建）scrape 数据库，创建 pages、links 和 failed_pages 三张表，返回连接对象。"""
+    """打开（或创建）scrape 数据库，创建 pages 和 failed_pages 两张表，返回连接对象。"""
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS pages ("
         "  url TEXT PRIMARY KEY,"
-        "  html_path TEXT NOT NULL,"
+        "  html_path TEXT DEFAULT NULL,"
         "  content_type TEXT NOT NULL DEFAULT '',"
         "  links TEXT DEFAULT NULL,"
         "  video_count INTEGER NOT NULL DEFAULT -1,"
@@ -661,7 +661,7 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS failed_pages ("
         "  url TEXT PRIMARY KEY,"
         "  reason TEXT NOT NULL,"
-        "  html_path TEXT NOT NULL DEFAULT '',"
+        "  html_path TEXT DEFAULT NULL,"
         "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))"
         ")"
     )
@@ -748,7 +748,7 @@ def _flush_failed_pages_batch(conn: sqlite3.Connection, entries: list):
         return
     try:
         rows = [
-            (p['url'], p['reason'], p.get('html_path', ''))
+            (p['url'], p['reason'], p.get('html_path', None))
             for p in entries
         ]
         conn.executemany(
@@ -827,7 +827,15 @@ def save_site_html(
             continue
         # 优先从 links_cache 读取，否则回退到解析 HTML
         links = links_cache.get(cached_url, None)
+        if cached['html_path'] is None:
+            #_log(f'缓存记录 html_path 为空: {cached_url}')
+            continue
         cached_html_path = Path(cached['html_path'])
+        if cached_html_path.exists():
+            visited.add(cached_url)
+        else:
+            #_log(f'缓存 HTML 文件不存在: {cached_html_path} (URL: {cached_url})')
+            continue
         if links is None:
             try:
                 _log(f'Processing cached URL: {cached_url}')
@@ -841,14 +849,13 @@ def save_site_html(
                 dirty_links[cached_url] = links
             except Exception:
                 links = []
-        if cached_html_path.exists():
-            visited.add(cached_url)
-            for link in links:
-                if link not in visited and link not in failed_urls:
-                    # 从 URL 路径解析深度（path 分段数)
-                    cached_path = urlparse(link).path.strip('/')
-                    cached_depth = len(cached_path.split('/')) if cached_path else 0
-                    queue.append((link, cached_depth))
+
+        for link in links:
+            if link not in visited and link not in failed_urls:
+                # 从 URL 路径解析深度（path 分段数)
+                cached_path = urlparse(link).path.strip('/')
+                cached_depth = len(cached_path.split('/')) if cached_path else 0
+                queue.append((link, cached_depth))
 
     # 如果 start_url 不在缓存中，加入队列
     if start_url not in visited and start_url not in failed_urls:
@@ -900,7 +907,7 @@ def save_site_html(
             return {
                 'url': page_url,
                 'html': html_text,
-                'html_path': '',
+                'html_path': None,
                 'error': '',
                 'content_type': content_type,
                 'links': links,
@@ -909,7 +916,7 @@ def save_site_html(
             return {
                 'url': page_url,
                 'html': '',
-                'html_path': '',
+                'html_path': None,
                 'error': str(exc),
                 'content_type': '',
                 'links': None,
@@ -1000,6 +1007,9 @@ def save_site_html(
                     except Exception as e:
                         _log(f'保存 HTML 失败: {current_url}, 错误: {e}')
                         continue
+                else:
+                    _log(f'非 HTML 内容类型: {current_url}, content_type={content_type}')
+                    html_path = None
 
                 html_cache.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
                 dirty_html.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
@@ -1037,7 +1047,7 @@ def save_site_html(
         'start_url': start_url,
         'saved_count': len(html_cache),
         'pages': [{'url': p['url'], 'html_path': p['html_path'], 'content_type': p.get('content_type', '')}
-                  for p in html_cache],
+                  for p in html_cache if p['html_path'] is not None],
     }
     with open(manifest_path, 'w', encoding='utf-8') as f:
         json.dump(manifest_payload, f, ensure_ascii=False, indent=2)
@@ -1072,6 +1082,12 @@ def analyze_saved_html(manifest_path: Path, progress_callback=None, phase_callba
         current_url = page['url']
         if callable(progress_callback):
             progress_callback(idx, total_known_html, current_url)
+
+        if page.get('html_path') is None:
+            if current_url not in analysis_failed_reasons:
+                analysis_failed.append(current_url)
+            analysis_failed_reasons[current_url] = 'html_path_is_null'
+            continue
 
         html_path = Path(page['html_path'])
         try:
