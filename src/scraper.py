@@ -515,10 +515,9 @@ def fetch_html_with_playwright(
             return '', ctype
 
         current_html = page.content()
-        settle_wait_seconds = max(float(wait_seconds), 1.0)
 
         if _is_challenge_or_block_page(current_html):
-            challenge_wait_seconds = max(10.0, settle_wait_seconds)
+            challenge_wait_seconds = max(10.0, wait_seconds)
             challenge_deadline = time.time() + challenge_wait_seconds
             _log(f'检测到挑战页，额外最多等待{challenge_wait_seconds:.1f}秒: {url}')
             while time.time() < challenge_deadline:
@@ -529,9 +528,8 @@ def fetch_html_with_playwright(
                 if not _is_challenge_or_block_page(current_html):
                     break
         else:
-            _log(f'未检测到挑战页，额外等待{settle_wait_seconds/2:.1f}秒: {url}')
-            if settle_wait_seconds > 0:
-                time.sleep(settle_wait_seconds / 2)
+            _log(f'未检测到挑战页，额外等待{1.0:.1f}秒: {url}')
+            time.sleep(1.0)
 
         return page.content(), ctype
 
