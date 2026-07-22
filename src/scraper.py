@@ -964,7 +964,7 @@ def save_site_html(
             visited.add(current_url)
             future = executor.submit(_fetch_one, (current_url, depth))
             pending[future] = (current_url, depth)
-            _log(f'提交线程: {current_url} (深度 {depth}), 待处理: {len(pending)}')
+            _log(f'提交线程: {current_url}, 待处理: {len(queue)}')
             return True
         return False
 
