@@ -847,8 +847,6 @@ def save_site_html(
             visited.add(cached_url)
             _log(f'跳过非 HTML 缓存 URL: {cached_url} (content_type={ctype})')
             continue
-        # 优先从 links_cache 读取，否则回退到解析 HTML
-        links = links_cache.get(cached_url, None)
         if cached['html_path'] is None:
             #_log(f'缓存记录 html_path 为空: {cached_url}')
             continue
@@ -858,6 +856,8 @@ def save_site_html(
         else:
             #_log(f'缓存 HTML 文件不存在: {cached_html_path} (URL: {cached_url})')
             continue
+        # 优先从 links_cache 读取，否则回退到解析 HTML
+        links = links_cache.get(cached_url, None)
         if links is None:
             try:
                 _log(f'Processing cached URL: {cached_url}')
@@ -866,11 +866,13 @@ def save_site_html(
                 if _is_challenge_or_block_page(cached_html):
                     _log(f'Cached HTML is a challenge/block page: {cached_url}')
                     cached_html_path.unlink(missing_ok=True)
+                    visited.remove(cached_url)
                     continue
                 links = _extract_links(cached_html, cached_url, root_host)
                 dirty_links[cached_url] = links
             except Exception:
                 links = []
+                visited.remove(cached_url)
 
         for link in links:
             if link not in visited and link not in failed_urls:
