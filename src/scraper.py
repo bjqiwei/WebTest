@@ -429,7 +429,8 @@ def _is_challenge_or_block_page(html: str) -> bool:
         '正在进行安全验证',
         '请验证您是真人',
         '安全服务防护恶意自动程序',
-        '403 error: page not available'
+        '403 error: page not available',
+        'http error 400'
     )
     # Do not treat generic "cloudflare" mentions as challenge pages;
     # many normal sites include Cloudflare assets and would be false positives.
@@ -821,6 +822,7 @@ def save_site_html(
     set_log_file(outdir / 'scrape.log')
     root_host = urlparse(start_url).netloc
     visited = set()
+    queued = set()
     queue = deque()
     failed_pages: list = _load_failed_pages_from_db(start_url, outdir)
     failed_urls: set = {p['url'] for p in failed_pages}
@@ -873,15 +875,17 @@ def save_site_html(
                 visited.remove(cached_url)
 
         for link in links:
-            if link not in visited and link not in failed_urls:
+            if link not in visited and link not in failed_urls and link not in queued:
                 # 从 URL 路径解析深度（path 分段数)
                 cached_path = urlparse(link).path.strip('/')
                 cached_depth = len(cached_path.split('/')) if cached_path else 0
                 queue.append((link, cached_depth))
+                queued.add(link)
 
     # 如果 start_url 不在缓存中，加入队列
-    if start_url not in visited and start_url not in failed_urls:
+    if start_url not in visited and start_url not in failed_urls and start_url not in queued:
         queue.appendleft((start_url, 0))
+        queued.add(start_url)
     unlimited_depth = max_depth < 0
     unlimited_pages = max_pages <= 0
     max_concurrency = max(1, int(max_concurrency))
@@ -955,6 +959,7 @@ def save_site_html(
             if not unlimited_pages and len(html_cache) >= max_pages:
                 return False
             current_url, depth = queue.popleft()
+            queued.discard(current_url)
             if not unlimited_depth and depth > max_depth:
                 continue
             if current_url in visited:
@@ -1042,10 +1047,11 @@ def save_site_html(
 
                 if links:
                     for link in links:
-                        if link not in visited and link not in failed_urls:
+                        if link not in visited and link not in failed_urls and link not in queued:
                             cached_path = urlparse(link).path.strip('/')
                             cached_depth = len(cached_path.split('/')) if cached_path else 0
                             queue.append((link, cached_depth))
+                            queued.add(link)
 
             _flush_dirty()
             # 此线程完成，有空闲槽位，立即提交新任务
