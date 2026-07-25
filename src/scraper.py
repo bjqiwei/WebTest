@@ -104,7 +104,8 @@ def set_log_file(path: Path):
 
 def _log(message: str):
     now = datetime.now().strftime('%H:%M:%S')
-    line = f'[{now}] {message}'
+    tid = threading.current_thread().native_id
+    line = f'[{now}][{tid}] {message}'
     print(line)
     if _log_path is not None:
         try:
@@ -504,11 +505,22 @@ def fetch_html_with_playwright(
         """在已打开的 page 上导航并捕获 HTML。返回 (html, content_type)。"""
         _log(f'开始打开页面: {url}')
         page.route("**/google-analytics.com/**", lambda route: route.abort())
-        response = page.goto(url, wait_until='domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
-        ctype = response.headers.get('content-type', '') if response is not None else ''
+        try:
+            response = page.goto(url, wait_until='domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
+            ctype = response.headers.get('content-type', '') if response is not None else ''
+        except Exception as goto_err:
+            err_msg = str(goto_err)
+            if 'net::ERR_HTTP_RESPONSE_CODE_FAILURE' in err_msg:
+                _log(f'HTTP 响应错误，使用 page.request.get 重新获取: {url}, 错误: {goto_err}')
+                api_resp = page.request.get(url)
+                body_bytes = api_resp.body()
+                html_text = body_bytes.decode('utf-8', errors='replace')
+                ctype = api_resp.headers.get('content-type', '')
+                return html_text, ctype
+            raise
 
         try:
-            _log(f'等待 DOM 加载完成: {url} 超时时间: {max(10.0, body_deadline - time.time()):.1f}秒')
+            #_log(f'等待 DOM 加载完成: {url} 超时时间: {max(10.0, body_deadline - time.time()):.1f}秒')
             page.wait_for_load_state('domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
         except TimeoutError:
             _log(f'等待 DOM 加载超时: {url}')
@@ -543,10 +555,10 @@ def fetch_html_with_playwright(
         raise
     finally:
         page.close()
-        _log(f'CDP tab已关闭: {url}')
+        #_log(f'CDP tab已关闭: {url}')
         if not use_cdp:
             context.close()
-            _log(f'浏览器已关闭: {url}')
+            #_log(f'浏览器已关闭: {url}')
 
     return {'html': html, 'content_type': content_type}
 
@@ -962,7 +974,7 @@ def save_site_html(
             visited.add(current_url)
             future = executor.submit(_fetch_one, (current_url, depth))
             pending[future] = (current_url, depth)
-            _log(f'提交线程: {current_url}, 待处理: {len(queue)}')
+            #_log(f'提交线程: {current_url}, 待处理: {len(queue)}')
             return True
         return False
 
@@ -1015,7 +1027,7 @@ def save_site_html(
 
                 if HTML_CONTENT_TYPE_RE.search(content_type):
                     page_index = len(html_cache) + 1
-                    _log(f"正在保存 HTML: {current_url} (深度 {depth}, 页面索引 {page_index})")
+                    _log(f"正在保存 HTML文件: {current_url} (深度 {depth}, 页面索引 {page_index})")
                     try:
                         html_path = _save_html_snapshot(
                             current_url,
