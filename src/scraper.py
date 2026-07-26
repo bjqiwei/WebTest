@@ -176,7 +176,7 @@ def _normalize_url(url: str) -> str:
     if parsed.scheme not in ('http', 'https'):
         return ''
     path = parsed.path or '/'
-    return parsed._replace(path=path, fragment='').geturl()
+    return parsed._replace(path=path, query='', fragment='').geturl()
 
 
 def _is_same_domain(url: str, root_host: str) -> bool:
@@ -977,10 +977,10 @@ def save_site_html(
             #_log(f'提交线程: {current_url}, 待处理: {len(queue)}')
             return True
         return False
-
+  
     def _flush_dirty():
         if dirty_html or dirty_links or dirty_failed:
-            _log(f'批量保存到 SQLite: {len(dirty_html)} HTML, {len(dirty_links)} links, {len(dirty_failed)} failed')
+            _log(f'批量保存到 SQLite: {len(dirty_html)} HTML, {len(dirty_links)} links, {len(dirty_failed)} failed, 待处理: {len(queue)}')
             _flush_html_batch(conn, dirty_html)
             dirty_html.clear()
             _flush_links_batch(conn, dirty_links)
@@ -1027,7 +1027,7 @@ def save_site_html(
 
                 if HTML_CONTENT_TYPE_RE.search(content_type):
                     page_index = len(html_cache) + 1
-                    _log(f"正在保存 HTML文件: {current_url} (深度 {depth}, 页面索引 {page_index})")
+                    _log(f"正在保存 HTML文件: {current_url}")
                     try:
                         html_path = _save_html_snapshot(
                             current_url,
