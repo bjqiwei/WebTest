@@ -683,11 +683,6 @@ def _failed_dir(outdir: Path) -> Path:
     return outdir / 'failed'
 
 
-def _manifest_path(start_url: str, outdir: Path) -> Path:
-    """最终生成的 manifest JSON 路径（供 analyze_saved_html 消费）。"""
-    return outdir / f"{_safe_name_from_url(start_url)}_cache.json"
-
-
 def _scrape_db_path(start_url: str, outdir: Path) -> Path:
     """合并后的 SQLite 数据库路径（含 pages 和 failed_pages 两张表）。"""
     return outdir / f"{_safe_name_from_url(start_url)}_scrape.db"
@@ -747,13 +742,14 @@ def _load_html_cache_from_db(start_url: str, outdir: Path) -> list:
 
 
 def _flush_html_batch(conn: sqlite3.Connection, entries: list):
-    """批量写（INSERT OR REPLACE）脏页面记录到 SQLite。"""
+    """批量写（INSERT OR REPLACE）脏页面记录到 SQLite。写入时重置 video_count/image_count 为 -1。"""
     if not entries:
         return
     try:
         rows = [(e['url'], e['html_path'], e.get('content_type', '')) for e in entries]
         conn.executemany(
-            "INSERT OR REPLACE INTO pages (url, html_path, content_type) VALUES (?, ?, ?)", rows
+            "INSERT OR REPLACE INTO pages (url, html_path, content_type, video_count, image_count)"
+            " VALUES (?, ?, ?, -1, -1)", rows
         )
         conn.commit()
     except Exception:
@@ -1104,24 +1100,12 @@ def save_site_html(
     _flush_failed_pages_batch(conn, dirty_failed)
     dirty_failed.clear()
     conn.close()
-    # 写入最终 manifest JSON 供 analyze_saved_html 消费
-    manifest_path = _manifest_path(start_url, outdir)
-    manifest_payload = {
-        'start_url': start_url,
-        'saved_count': len(html_cache),
-        'pages': [{'url': p['url'], 'html_path': p['html_path'], 'content_type': p.get('content_type', '')}
-                  for p in html_cache if p['html_path'] is not None],
-    }
-    with open(manifest_path, 'w', encoding='utf-8') as f:
-        json.dump(manifest_payload, f, ensure_ascii=False, indent=2)
 
     result = {
         'start_url': start_url,
         'saved_count': len(html_cache),
-        'pages': html_cache,
     }
     result['failed_count'] = len(failed_urls)
-    result['summary_path'] = str(manifest_path)
     return result
 
 

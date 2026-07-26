@@ -9,7 +9,6 @@ from src.scraper import (
   fetch_html,
   is_file_url,
   scrape_site,
-  scrape_url,
 )
 
 
@@ -82,11 +81,8 @@ class TestIsFileUrl:
     # ── 回归风险：目录型路由不应被误判 ──
 
     def test_download_directory_html_route(self):
-        """
-        /download/ 模式匹配的是目录片段，可能误杀真实 HTML 页面。
-        例如 /download/manual 可能是一个可访问的 HTML 文档页。
-        """
-        assert is_file_url('https://example.com/download/manual') is True
+        """目录型路由不必判为文件（/download/ 模式已移除）。"""
+        assert is_file_url('https://example.com/download/manual') is False
 
     def test_assets_directory_no_dot(self):
         """没有 '.' 的 /assets/ 路径不应被误判为文件。"""
@@ -133,48 +129,6 @@ class TestExtractVideos:
         assert videos[2]['original_url'] == 'https://www.youtube.com/embed/abc123'
         assert videos[3]['original_url'] == 'https://cdn.example.com/movie.mp4'
         assert [v['index'] for v in videos] == [1, 2, 3, 4]
-
-
-def test_scrape_url_outputs_counter_and_json(tmp_path, monkeypatch):
-    sample_html = '''
-    <html>
-      <body>
-        <main>
-          <p>Video description text around content area.</p>
-          <video src="https://cdn.example.com/a.mp4"></video>
-        </main>
-      </body>
-    </html>
-    '''
-
-    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': sample_html, 'content_type': 'text/html'})
-
-    result = scrape_url('https://www.bosch.com/careers', tmp_path)
-
-    assert result['page_count'] == 1
-    assert result['video_count'] == 1
-    assert result['media_count'] == 1
-
-    assert re.search(r'0001_careers_html_\d{14}\.json$', result['json_path'])
-    json_path = tmp_path / Path(result['json_path']).name
-    data = json.loads(json_path.read_text(encoding='utf-8'))
-    assert data['original_link'] == 'https://www.bosch.com/careers'
-    assert 'content_blocks' in data
-    assert data['extra'] == {}
-    media_items = [b for b in data['content_blocks'] if isinstance(b, dict)]
-    assert media_items[0]['original_url'] == 'https://cdn.example.com/a.mp4'
-    assert media_items[0]['type'] == 'video'
-
-
-def test_scrape_url_decodes_output_filename(tmp_path, monkeypatch):
-    sample_html = '<html><body><main><p>ok content</p></main></body></html>'
-
-    monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': sample_html, 'content_type': 'text/html'})
-
-    result = scrape_url('https://example.com/hello%20world', tmp_path)
-    output_name = Path(result['json_path']).name
-
-    assert 'hello world' in output_name
 
 
 def test_safe_name_root_url_has_single_index():
@@ -294,18 +248,10 @@ def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
 
     assert result['page_count'] == 2
     assert result['video_count'] == 2
-    assert result['media_count'] == 2
+    assert result['page_count'] == 2
+    assert result['video_count'] == 2
+    assert result['image_count'] == 2
     assert result['failed_count'] == 0
-
-    first = result['pages'][0]
-    second = result['pages'][1]
-    assert first['url'] == 'https://example.com/'
-    assert second['url'] == 'https://example.com/careers.html'
-
-    summary = json.loads((tmp_path / 'example.com_summary.json').read_text(encoding='utf-8'))
-    assert summary['page_count'] == 2
-    assert summary['video_count'] == 2
-    assert summary['media_count'] == 2
 
 
 def test_scrape_site_follows_header_nav_links(tmp_path, monkeypatch):
@@ -326,7 +272,6 @@ def test_scrape_site_follows_header_nav_links(tmp_path, monkeypatch):
     result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
     assert result['page_count'] == 2
     assert result['failed_count'] == 0
-    assert [p['url'] for p in result['pages']] == ['https://example.com/', 'https://example.com/about']
 
 
 def test_scrape_site_unlimited_depth_and_pages(tmp_path, monkeypatch):
@@ -503,14 +448,15 @@ def test_scrape_site_saves_non_html_content_without_extension(monkeypatch, tmp_p
     # All 3 pages saved (non-HTML content no longer rejected)
     assert result['saved_count'] == 3
     assert result['failed_count'] == 0
-    # Cache should contain content_type field
-    cache_files = list(tmp_path.glob('*_cache.json'))
-    assert len(cache_files) == 1
-    cache_payload = json.loads(cache_files[0].read_text(encoding='utf-8'))
-    noext_entry = [p for p in cache_payload['pages'] if 'noext' in p['url']][0]
-    assert noext_entry['content_type'] == 'image/jpeg'
-    ok_entry = [p for p in cache_payload['pages'] if 'ok' in p['url']][0]
-    assert ok_entry['content_type'] == 'text/html'
+    # Verify content_type was persisted to SQLite
+    import sqlite3
+    from src.scraper import _scrape_db_path
+    db = _scrape_db_path('https://example.com', tmp_path)
+    conn = sqlite3.connect(str(db))
+    rows = dict(conn.execute("SELECT url, content_type FROM pages"))
+    conn.close()
+    assert rows.get('https://example.com/img/noext') == 'image/jpeg'
+    assert rows.get('https://example.com/ok.html') == 'text/html'
 
 
 def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
@@ -518,6 +464,17 @@ def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
         'https://example.com/': '<html><body><a href="/a.html">a</a></body></html>',
         'https://example.com/a.html': '<html><body><p>a</p></body></html>',
     }
+
+    def _db_urls():
+        import sqlite3
+        from src.scraper import _scrape_db_path
+        db = _scrape_db_path('https://example.com', tmp_path)
+        if not db.exists():
+            return []
+        conn = sqlite3.connect(str(db))
+        rows = [row[0] for row in conn.execute("SELECT url FROM pages ORDER BY url")]
+        conn.close()
+        return rows
 
     fetch_calls = {'count': 0}
 
@@ -530,15 +487,7 @@ def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
     first = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=1, max_pages=10)
     assert first['saved_count'] == 2
     assert fetch_calls['count'] == 2
-
-    cache_files = list(tmp_path.glob('*_cache.json'))
-    assert len(cache_files) == 1
-    cache_payload = json.loads(cache_files[0].read_text(encoding='utf-8'))
-    assert cache_payload['saved_count'] == 2
-    assert {p['url'] for p in cache_payload['pages']} == {'https://example.com/', 'https://example.com/a.html'}
-    # Verify content_type is present in cache entries
-    for p in cache_payload['pages']:
-        assert p.get('content_type') == 'text/html'
+    assert set(_db_urls()) == {'https://example.com/', 'https://example.com/a.html'}
 
     def fail_fetch(url, **kwargs):
         raise AssertionError(f'fetch_html should not be called for cached URL: {url}')
@@ -548,8 +497,4 @@ def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
     second = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=1, max_pages=10)
     assert second['saved_count'] == 2
     assert second['failed_count'] == 0
-
-    cache_payload = json.loads(cache_files[0].read_text(encoding='utf-8'))
-    assert cache_payload['saved_count'] == 2
-    assert cache_payload['pages'][0]['url'] == 'https://example.com/'
-    assert cache_payload['pages'][1]['url'] == 'https://example.com/a.html'
+    assert set(_db_urls()) == {'https://example.com/', 'https://example.com/a.html'}

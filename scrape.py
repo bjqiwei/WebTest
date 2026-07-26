@@ -26,7 +26,6 @@ def _print_summary(result):
         print('失败示例:')
         for u, reason in list(result['failed_reasons'].items())[:3]:
             print(f'- {u} -> {reason}')
-    print(f'汇总JSON: {result["summary_path"]}')
 
 
 def _add_shared_fetch_args(parser):
@@ -93,7 +92,6 @@ def main():
         print('保存完成')
         print(f'已保存HTML: {result["saved_count"]}个')
         print(f'失败数: {result.get("failed_count", 0)}')
-        print(f'清单JSON: {result["summary_path"]}')
         return
 
     result = scrape_site(
