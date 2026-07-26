@@ -1165,27 +1165,42 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
 
         if page.get('html_path') is None:
             analysis_failed_reasons[current_url] = 'html_path_is_null'
+                    # 更新 DB 中的统计值
+            if db_conn is not None:
+                try:
+                    db_conn.execute(
+                        "UPDATE pages SET video_count = ?, image_count = ? WHERE url = ?",
+                        (0, 0, current_url),
+                    )
+                    db_conn.commit()
+                except Exception:
+                    pass
             continue
 
         src_html_path = Path(page['html_path'])
-        try:
-            html = src_html_path.read_text(encoding='utf-8')
-        except Exception:
-            analysis_failed_reasons[current_url] = 'html_read_error'
-            continue
+        content_type = page.get('content_type', '')
 
-        # 先分析内容，获取视频/图片计数
-        try:
-            content_blocks = extract_content_blocks(html, current_url)
-        except Exception:
-            analysis_failed_reasons[current_url] = 'parse_error'
-            continue
+        if HTML_CONTENT_TYPE_RE.search(content_type):
+            try:
+                html = src_html_path.read_text(encoding='utf-8')
+            except Exception:
+                analysis_failed_reasons[current_url] = 'html_read_error'
+                continue
 
-        video_count = sum(1 for b in content_blocks if isinstance(b, dict) and b.get('type') == 'video')
-        image_count = sum(1 for b in content_blocks if isinstance(b, dict) and b.get('type') == 'image')
+            # 先分析内容，获取视频/图片计数
+            try:
+                content_blocks = extract_content_blocks(html, current_url)
+            except Exception:
+                analysis_failed_reasons[current_url] = 'parse_error'
+                continue
+
+            video_count = sum(1 for b in content_blocks if isinstance(b, dict) and b.get('type') == 'video')
+            image_count = sum(1 for b in content_blocks if isinstance(b, dict) and b.get('type') == 'image')
+        else:
+            video_count = 0
+            image_count = 0
 
         # 只有包含视频的页面才保存 HTML + JSON
-
         if video_count > 0:
             try:
                 timestamp = src_html_path.stem.rsplit('_html_', 1)[-1]
