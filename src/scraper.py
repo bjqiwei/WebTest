@@ -449,9 +449,8 @@ def _is_challenge_or_block_page(html: str) -> bool:
     sample = (html or '').lower()
     strong_markers = (
         'cf-browser-verification',
-        'attention required',
+        'attention required!',
         'checking your browser',
-        'challenges.cloudflare.com',
         'cf-chl-',
         'turnstile',
         'enable javascript and cookies',
@@ -521,7 +520,6 @@ def _try_click_challenge_checkbox(page) -> bool:
 
 def fetch_html_with_playwright(
     url: str,
-    timeout=30,
     wait_seconds: float = 5.0,
     headless: bool = True,
     cdp_url: str = '',
@@ -530,7 +528,7 @@ def fetch_html_with_playwright(
     if sync_playwright is None:
         raise RuntimeError('Playwright is not installed. Run: pip install playwright and playwright install chromium')
 
-    body_deadline = time.time() + max(float(timeout), 10.0)
+    body_deadline = time.time() + max(float(wait_seconds), 10.0)
 
     def _navigate_and_capture(page, url, body_deadline, wait_seconds):
         """在已打开的 page 上导航并捕获 HTML。返回 (html, content_type)。"""
@@ -596,7 +594,6 @@ def fetch_html_with_playwright(
 
 def fetch_html(
     url: str,
-    timeout=60,
     renderer: str = 'auto',
     playwright_headless: bool = True,
     playwright_wait_seconds: float = 5.0,
@@ -609,15 +606,14 @@ def fetch_html(
     if renderer == 'playwright':
         result = fetch_html_with_playwright(
             url,
-            timeout=max(timeout, 60),
+            wait_seconds=max(playwright_wait_seconds, 10.0),
             headless=playwright_headless,
-            wait_seconds=playwright_wait_seconds,
             cdp_url=playwright_cdp_url,
         )
         return result
 
     try:
-        r = requests.get(url, headers=headers, timeout=timeout)
+        r = requests.get(url, headers=headers, timeout=playwright_wait_seconds)
         r.raise_for_status()
         ctype = r.headers.get('content-type', '')
         # Many sites return missing/incorrect charset headers. Prefer apparent encoding
@@ -629,9 +625,8 @@ def fetch_html(
         if renderer == 'auto':
             result = fetch_html_with_playwright(
                 url,
-                timeout=max(timeout, 60),
+                wait_seconds=max(playwright_wait_seconds, 10.0),
                 headless=playwright_headless,
-                wait_seconds=playwright_wait_seconds,
                 cdp_url=playwright_cdp_url,
             )
             return result
@@ -640,9 +635,8 @@ def fetch_html(
     if renderer == 'auto' and _is_challenge_or_block_page(html):
         result = fetch_html_with_playwright(
             url,
-            timeout=max(timeout, 60),
+            wait_seconds=max(playwright_wait_seconds, 10.0),
             headless=playwright_headless,
-            wait_seconds=playwright_wait_seconds,
             cdp_url=playwright_cdp_url,
         )
         return result
@@ -1000,6 +994,7 @@ def save_site_html(
             current_url, depth = queue.popleft()
             queued.discard(current_url)
             if not unlimited_depth and depth > max_depth:
+                _log(f'跳过超出深度限制的 URL: {current_url} (depth={depth})')
                 continue
             if current_url in visited:
                 continue
