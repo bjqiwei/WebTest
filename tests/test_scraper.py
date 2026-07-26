@@ -7,39 +7,132 @@ from src.scraper import (
   extract_content_blocks,
   extract_videos,
   fetch_html,
+  is_file_url,
   scrape_site,
   scrape_url,
 )
 
 
-def test_extract_videos_from_html():
-    html = '''
-    <html>
-      <body>
-        <header><a href="/menu.mp4">menu</a></header>
-        <main>
-          <p>Intro paragraph for the first video.</p>
-          <video src="/media/v1.mp4"></video>
-          <figure>
-            <video><source src="https://cdn.example.com/v2.webm"></source></video>
-            <figcaption>Vid 2</figcaption>
-          </figure>
-          <iframe src="https://www.youtube.com/embed/abc123"></iframe>
-          <a href="https://cdn.example.com/movie.mp4">download</a>
-          <a href="https://cdn.example.com/movie.mp4">download duplicate</a>
-        </main>
-      </body>
-    </html>
-    '''
+class TestIsFileUrl:
+    """单元测试 is_file_url 的三个过滤分支。"""
 
-    videos = extract_videos(html, 'https://example.com')
-    assert len(videos) == 4
-    assert videos[0]['original_url'].endswith('/media/v1.mp4')
-    assert videos[1]['original_url'] == 'https://cdn.example.com/v2.webm'
-    assert videos[1]['note'] == 'Vid 2'
-    assert videos[2]['original_url'] == 'https://www.youtube.com/embed/abc123'
-    assert videos[3]['original_url'] == 'https://cdn.example.com/movie.mp4'
-    assert [v['index'] for v in videos] == [1, 2, 3, 4]
+    # ── 分支 1：显式扩展名 ──
+
+    def test_known_extension_pdf(self):
+        assert is_file_url('https://example.com/doc.pdf') is True
+
+    def test_known_extension_mp4(self):
+        assert is_file_url('https://example.com/video.mp4') is True
+
+    def test_known_extension_jpg(self):
+        assert is_file_url('https://example.com/photo.jpg') is True
+
+    def test_known_extension_zip(self):
+        assert is_file_url('https://example.com/archive.zip') is True
+
+    def test_known_extension_case_insensitive(self):
+        assert is_file_url('https://example.com/doc.PDF') is True
+        assert is_file_url('https://example.com/photo.JPEG') is True
+
+    # ── 分支 2：路径模式 ──
+
+    def test_unicef_media_pattern(self):
+        assert is_file_url('https://www.unicef.org/media/7606/file') is True
+
+    def test_unicef_media_pattern_with_query(self):
+        assert is_file_url('https://www.unicef.org/media/7606/file?download=1') is True
+
+    def test_download_path_pattern(self):
+        assert is_file_url('https://example.com/download/setup.exe') is True
+
+    def test_assets_with_dot_pattern(self):
+        assert is_file_url('https://example.com/assets/css/style.css') is True
+
+    def test_static_with_dot_pattern(self):
+        assert is_file_url('https://example.com/static/js/app.js') is True
+
+    # ── 分支 3：泛化后缀检查（非 .html/.htm）──
+
+    def test_non_html_suffix_bak(self):
+        assert is_file_url('https://example.com/backup.zip.bak') is True
+
+    def test_non_html_suffix_shtml(self):
+        assert is_file_url('https://example.com/page.shtml') is True
+
+    def test_non_html_suffix_php(self):
+        assert is_file_url('https://example.com/index.php') is True
+
+    # ── 否定用例 ──
+
+    def test_plain_html(self):
+        assert is_file_url('https://example.com/about.html') is False
+
+    def test_plain_htm(self):
+        assert is_file_url('https://example.com/index.htm') is False
+
+    def test_extensionless_route(self):
+        assert is_file_url('https://example.com/about') is False
+
+    def test_root_url(self):
+        assert is_file_url('https://example.com/') is False
+
+    def test_deep_extensionless_route(self):
+        assert is_file_url('https://example.com/careers/jobs') is False
+
+    # ── 回归风险：目录型路由不应被误判 ──
+
+    def test_download_directory_html_route(self):
+        """
+        /download/ 模式匹配的是目录片段，可能误杀真实 HTML 页面。
+        例如 /download/manual 可能是一个可访问的 HTML 文档页。
+        """
+        assert is_file_url('https://example.com/download/manual') is True
+
+    def test_assets_directory_no_dot(self):
+        """没有 '.' 的 /assets/ 路径不应被误判为文件。"""
+        assert is_file_url('https://example.com/assets/brand') is False
+
+    def test_static_directory_no_dot(self):
+        """没有 '.' 的 /static/ 路径不应被误判为文件。"""
+        assert is_file_url('https://example.com/static/about') is False
+
+    def test_media_non_file_route(self):
+        """/media/ 后跟的不是 file 端点不应被误判。"""
+        assert is_file_url('https://example.com/media/7606') is False
+        assert is_file_url('https://example.com/media/news') is False
+
+
+class TestExtractVideos:
+    """原 extract_videos 测试。"""
+
+    def test_extract_videos_from_html(self):
+        html = '''
+        <html>
+          <body>
+            <header><a href="/menu.mp4">menu</a></header>
+            <main>
+              <p>Intro paragraph for the first video.</p>
+              <video src="/media/v1.mp4"></video>
+              <figure>
+                <video><source src="https://cdn.example.com/v2.webm"></source></video>
+                <figcaption>Vid 2</figcaption>
+              </figure>
+              <iframe src="https://www.youtube.com/embed/abc123"></iframe>
+              <a href="https://cdn.example.com/movie.mp4">download</a>
+              <a href="https://cdn.example.com/movie.mp4">download duplicate</a>
+            </main>
+          </body>
+        </html>
+        '''
+
+        videos = extract_videos(html, 'https://example.com')
+        assert len(videos) == 4
+        assert videos[0]['original_url'].endswith('/media/v1.mp4')
+        assert videos[1]['original_url'] == 'https://cdn.example.com/v2.webm'
+        assert videos[1]['note'] == 'Vid 2'
+        assert videos[2]['original_url'] == 'https://www.youtube.com/embed/abc123'
+        assert videos[3]['original_url'] == 'https://cdn.example.com/movie.mp4'
+        assert [v['index'] for v in videos] == [1, 2, 3, 4]
 
 
 def test_scrape_url_outputs_counter_and_json(tmp_path, monkeypatch):

@@ -114,6 +114,39 @@ def _log(message: str):
         except Exception:
             pass
 
+def is_file_url(url):
+    """检测 URL 是否指向文件"""
+    path = urlparse(url).path
+    
+    # 1. 检查常见文件扩展名
+    file_extensions = (
+        '.pdf', '.epub', '.mobi', '.azw', '.azw3',
+        '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+        '.zip', '.rar', '.7z', '.tar', '.gz',
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg',
+        '.mp3', '.mp4', '.avi', '.mov', '.wmv',
+        '.exe', '.msi', '.dmg'
+    )
+    if path.lower().endswith(file_extensions):
+        return True
+    
+    # 2. 检查常见文件路径模式
+    file_patterns = [
+        r'/media/\d+/file$',           # UNICEF 风格: /media/7606/file
+        r'/assets/.*\.',
+        r'/static/.*\.',
+    ]
+    for pattern in file_patterns:
+        if re.search(pattern, path, re.IGNORECASE):
+            return True
+    
+    # 3. 检查后缀中有 '.' 但不是 .html/.htm（你原来的逻辑）
+    if '.' in Path(path).suffix:
+        suffix = Path(path).suffix.lower()
+        if suffix not in ['.html', '.htm']:
+            return True
+    
+    return False
 
 def _safe_name_from_url(url: str, max_len: int = 120) -> str:
     p = urlparse(url)
@@ -882,6 +915,9 @@ def save_site_html(
                 # 从 URL 路径解析深度（path 分段数)
                 cached_path = urlparse(link).path.strip('/')
                 cached_depth = len(cached_path.split('/')) if cached_path else 0
+                if is_file_url(link):
+                    _log(f"跳过文件链接: {link}")
+                    continue
                 queue.append((link, cached_depth))
                 queued.add(link)
 
@@ -967,8 +1003,6 @@ def save_site_html(
                 continue
             if current_url in visited:
                 continue
-            if not re.search(r'\.html?$', urlparse(current_url).path, re.IGNORECASE) and '.' in Path(urlparse(current_url).path).suffix:
-                continue
             visited.add(current_url)
             future = executor.submit(_fetch_one, (current_url, depth))
             pending[future] = (current_url, depth)
@@ -1053,6 +1087,9 @@ def save_site_html(
                         if link not in visited and link not in failed_urls and link not in queued:
                             cached_path = urlparse(link).path.strip('/')
                             cached_depth = len(cached_path.split('/')) if cached_path else 0
+                            if is_file_url(link):
+                                _log(f"跳过文件链接: {link}")
+                                continue
                             queue.append((link, cached_depth))
                             queued.add(link)
 
