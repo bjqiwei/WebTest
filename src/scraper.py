@@ -415,12 +415,10 @@ def _is_html_document(html: str) -> bool:
 def _is_challenge_or_block_page(html: str) -> bool:
     sample = (html or '').lower()
     strong_markers = (
-        'just a moment',
         'cf-browser-verification',
         'attention required',
         'checking your browser',
         'challenges.cloudflare.com',
-        '__cf_chl_',
         'cf-chl-',
         'turnstile',
         'enable javascript and cookies',
