@@ -381,12 +381,14 @@ def _media_from_tag(tag: Tag, base_url: str):
 
 
 def extract_content_blocks(html: str, base_url: str):
+    """从 HTML 中提取文本块、视频和图片。视频和图片各自拥有独立的序号。"""
     soup = BeautifulSoup(html, 'html.parser')
     root = soup.find('main') or soup.body or soup
 
     blocks = []
-    seen_media = set()
-    media_index = 0
+    seen_urls = set()
+    video_index = 0
+    image_index = 0
 
     for tag in root.find_all(['h1', 'h2', 'h3', 'h4', 'p', 'li', 'video', 'iframe', 'a', 'img']):
         if not isinstance(tag, Tag) or _is_in_noise_area(tag):
@@ -395,13 +397,19 @@ def extract_content_blocks(html: str, base_url: str):
         media = _media_from_tag(tag, base_url)
         if media:
             key = media['original_url']
-            if key in seen_media:
+            if key in seen_urls:
                 continue
-            seen_media.add(key)
-            media_index += 1
-            media['index'] = media_index
-            media['id'] = hashlib.md5(f"{base_url}|{key}|{media_index}".encode('utf-8')).hexdigest()
-            blocks.append(media)
+            seen_urls.add(key)
+            if media['type'] == 'video':
+                video_index += 1
+                media['index'] = video_index
+                media['id'] = hashlib.md5(f"{base_url}|{key}|v{video_index}".encode('utf-8')).hexdigest()
+                blocks.append(media)
+            elif media['type'] == 'image':
+                image_index += 1
+                media['index'] = image_index
+                media['id'] = hashlib.md5(f"{base_url}|{key}|i{image_index}".encode('utf-8')).hexdigest()
+                blocks.append(media)
             continue
 
         text = _clean_text(tag.get_text(' ', strip=True))
@@ -654,11 +662,13 @@ def _save_html_snapshot(url: str, html: str, outdir: Path, page_index: int, time
     return str(html_path)
 
 
-def _save_page_output(url: str, html: str, outdir: Path, page_index: int, timestamp: str):
+def _save_page_output(url: str, html: str, outdir: Path, page_index: int, timestamp: str, content_blocks):
     base_name = _build_output_base_name(url, page_index, timestamp)
     html_path = outdir / f"{base_name}.html"
     json_path = outdir / f"{base_name}.json"
-    content_blocks = extract_content_blocks(html, url)
+    with open(html_path, 'w', encoding='utf-8') as f:
+        f.write(html)
+
     payload = {
         'original_link': url,
         'content_blocks': content_blocks,
@@ -667,16 +677,7 @@ def _save_page_output(url: str, html: str, outdir: Path, page_index: int, timest
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
-    media_count = sum(1 for b in content_blocks if isinstance(b, dict))
-    video_count = sum(1 for b in content_blocks if isinstance(b, dict) and b.get('type') == 'video')
-
-    return {
-        'html_path': str(html_path),
-        'json_path': str(json_path),
-        'content_blocks': content_blocks,
-        'media_count': media_count,
-        'video_count': video_count,
-    }
+    return str(html_path), str(json_path)
 
 
 def _failed_dir(outdir: Path) -> Path:
@@ -1109,83 +1110,125 @@ def save_site_html(
     return result
 
 
-def analyze_saved_html(manifest_path: Path, progress_callback=None, phase_callback=None):
-    manifest_path = Path(manifest_path)
-    with open(manifest_path, 'r', encoding='utf-8') as f:
-        manifest = json.load(f)
+def _load_unanalyzed_pages_from_db(start_url: str, outdir: Path) -> list:
+    """从 SQLite 加载 video_count = -1 或 video_count > 0 的页面（未分析或已有结果需刷新）。"""
+    db_path = _scrape_db_path(start_url, outdir)
+    if not db_path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA journal_mode=WAL")
+        cursor = conn.execute(
+            "SELECT url, html_path, content_type FROM pages WHERE video_count = -1 OR video_count > 0"
+        )
+        pages = [{'url': url, 'html_path': html_path, 'content_type': content_type}
+                 for url, html_path, content_type in cursor]
+        conn.close()
+        return pages
+    except Exception:
+        return []
 
-    pages = []
-    analysis_failed = []
+
+def analyze_saved_html(start_url: str, outdir: Path, progress_callback=None, phase_callback=None):
+    """读取尚未分析的页面（video_count == -1 && image_count == -1），逐一提取内容并输出 JSON。"""
+    pages = _load_unanalyzed_pages_from_db(start_url, outdir)
+    _log(f'Loaded {len(pages)} unanalyzed pages from SQLite.')
+    return _analyze_pages_from_cache(
+        pages, outdir,
+        progress_callback=progress_callback,
+        phase_callback=phase_callback,
+        start_url=start_url,
+    )
+
+
+
+def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_callback=None, start_url=None):
+    """从页面列表读取已保存 HTML，逐一提取内容并输出 JSON，同时更新 DB 中的 video_count/image_count。"""
     analysis_failed_reasons = {}
     total_videos = 0
     total_media = 0
-    manifest_pages = manifest.get('pages', [])
-    total_known_html = len(manifest_pages)
+    total_known_html = len(raw_pages)
+    result_pages = []
 
     if callable(phase_callback):
         phase_callback('analyzing_html')
 
-    for idx, page in enumerate(manifest_pages, start=1):
+    # 打开 DB 用于写入统计值
+    db_conn = _init_db(_scrape_db_path(start_url, outdir))
+    analyze_dir = outdir / 'analyze'
+    analyze_dir.mkdir(parents=True, exist_ok=True)
+
+    for idx, page in enumerate(raw_pages, start=1):
         current_url = page['url']
         if callable(progress_callback):
             progress_callback(idx, total_known_html, current_url)
 
         if page.get('html_path') is None:
-            if current_url not in analysis_failed_reasons:
-                analysis_failed.append(current_url)
             analysis_failed_reasons[current_url] = 'html_path_is_null'
             continue
 
-        html_path = Path(page['html_path'])
+        src_html_path = Path(page['html_path'])
         try:
-            html = html_path.read_text(encoding='utf-8')
+            html = src_html_path.read_text(encoding='utf-8')
         except Exception:
-            if current_url not in analysis_failed_reasons:
-                analysis_failed.append(current_url)
             analysis_failed_reasons[current_url] = 'html_read_error'
             continue
 
+        # 先分析内容，获取视频/图片计数
         try:
-            page_data = _save_page_output(
-                current_url,
-                html,
-                html_path.parent,
-                idx,
-                html_path.stem.rsplit('_html_', 1)[-1],
-            )
+            content_blocks = extract_content_blocks(html, current_url)
         except Exception:
-            if current_url not in analysis_failed_reasons:
-                analysis_failed.append(current_url)
-            analysis_failed_reasons[current_url] = 'parse_or_save_error'
+            analysis_failed_reasons[current_url] = 'parse_error'
             continue
 
-        total_videos += page_data['video_count']
-        total_media += page_data['media_count']
-        pages.append(
-            {
+        video_count = sum(1 for b in content_blocks if isinstance(b, dict) and b.get('type') == 'video')
+        image_count = sum(1 for b in content_blocks if isinstance(b, dict) and b.get('type') == 'image')
+
+        # 只有包含视频的页面才保存 HTML + JSON
+
+        if video_count > 0:
+            try:
+                timestamp = src_html_path.stem.rsplit('_html_', 1)[-1]
+                _save_page_output(
+                    current_url, html, analyze_dir, len(result_pages)+1, timestamp,
+                    content_blocks=content_blocks,
+                )
+            except Exception:
+                analysis_failed_reasons[current_url] = 'save_output_error'
+                continue
+
+            entry = {
                 'url': current_url,
-                'html_path': page_data['html_path'],
-                'json_path': page_data['json_path'],
-                'video_count': page_data['video_count'],
-                'media_count': page_data['media_count'],
+                'video_count': video_count,
+                'image_count': image_count,
             }
-        )
+
+            total_videos += video_count
+            total_media += image_count
+            result_pages.append(entry)
+
+        # 更新 DB 中的统计值
+        if db_conn is not None:
+            try:
+                db_conn.execute(
+                    "UPDATE pages SET video_count = ?, image_count = ? WHERE url = ?",
+                    (video_count, image_count, current_url),
+                )
+                db_conn.commit()
+            except Exception:
+                pass
+
+    if db_conn is not None:
+        db_conn.close()
 
     summary = {
-        'start_url': manifest['start_url'],
-        'manifest_path': str(manifest_path),
-        'page_count': len(pages),
+        'start_url': start_url,
+        'page_count': len(result_pages),
         'video_count': total_videos,
-        'media_count': total_media,
-        'failed_count': len(analysis_failed),
-        'failed': analysis_failed,
+        'image_count': total_media,
+        'failed_count': len(analysis_failed_reasons),
         'failed_reasons': analysis_failed_reasons,
-        'pages': pages,
     }
-    summary_path = manifest_path.parent / f"{_safe_name_from_url(manifest['start_url'])}_summary.json"
-    with open(summary_path, 'w', encoding='utf-8') as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
-    summary['summary_path'] = str(summary_path)
     return summary
 
 
@@ -1214,22 +1257,21 @@ def scrape_site(
         playwright_cdp_url=playwright_cdp_url,
         phase_callback=phase_callback,
     )
-    summary = analyze_saved_html(
-        save_result['summary_path'],
+
+    analyze_result = analyze_saved_html(
+        url,
+        outdir,
         progress_callback=progress_callback,
         phase_callback=phase_callback,
     )
-    return summary
-
-
-def scrape_url(url: str, outdir: Path):
-    result = scrape_site(url, outdir, max_depth=0, max_pages=1)
-    first_page = result['pages'][0] if result['pages'] else {}
-    return {
-        'html_path': first_page.get('html_path', ''),
-        'json_path': first_page.get('json_path', ''),
-        'page_count': result['page_count'],
-        'video_count': result['video_count'],
-        'media_count': result.get('media_count', 0),
-        'summary_path': result.get('summary_path', ''),
+    summary = {
+        'start_url': url,
+        'saved_count': save_result.get('saved_count', 0),
+        'failed_count': analyze_result.get('failed_count', 0),
+        'page_count': analyze_result.get('page_count', 0),
+        'video_count': analyze_result.get('video_count', 0),
+        'image_count': analyze_result.get('image_count', 0),
+        'failed': list(analyze_result.get('failed_reasons', {}).keys()),
+        'failed_reasons': analyze_result.get('failed_reasons', {}),
     }
+    return summary

@@ -156,9 +156,9 @@ def test_extract_content_blocks_with_image_and_video():
     assert len(media_items) == 2
     assert media_items[0]['type'] == 'image'
     assert media_items[0]['alt'] == 'Hero banner'
-    assert media_items[0]['index'] == 1
+    assert media_items[0]['index'] == 1  # image 独立序号
     assert media_items[1]['type'] == 'video'
-    assert media_items[1]['index'] == 2
+    assert media_items[1]['index'] == 1  # video 独立序号
 
 
 def test_extract_content_blocks_excludes_related_section():
@@ -250,7 +250,7 @@ def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
     assert result['video_count'] == 2
     assert result['page_count'] == 2
     assert result['video_count'] == 2
-    assert result['image_count'] == 2
+    assert result['image_count'] == 0
     assert result['failed_count'] == 0
 
 
@@ -290,24 +290,24 @@ def test_scrape_site_unlimited_depth_and_pages(tmp_path, monkeypatch):
 def test_scrape_site_skip_parse_error_and_continue(tmp_path, monkeypatch):
     pages = {
   'https://example.com/': '<html><body><a href="/bad.html">bad</a><a href="/good.html">good</a></body></html>',
-  'https://example.com/bad.html': '<html><body><main>bad page</main></body></html>',
-  'https://example.com/good.html': '<html><body><main><p>ok</p></main></body></html>',
+  'https://example.com/bad.html': '<html><body><main>bad page<video src="/bad.mp4"></video></main></body></html>',
+  'https://example.com/good.html': '<html><body><main><p>ok</p><video src="/ok.mp4"></video></main></body></html>',
     }
 
     monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'text/html'})
 
     original_save = scraper_module._save_page_output
 
-    def flaky_save(url, html, outdir, page_index, timestamp):
+    def flaky_save(url, html, outdir, page_index, timestamp, **kwargs):
         if url.endswith('/bad.html'):
             raise ValueError('parse error')
-        return original_save(url, html, outdir, page_index, timestamp)
+        return original_save(url, html, outdir, page_index, timestamp, **kwargs)
 
     monkeypatch.setattr('src.scraper._save_page_output', flaky_save)
 
     result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
-    assert result['page_count'] == 2
-    assert result['failed_count'] == 1
+    assert result['page_count'] == 2  # /（无视频）和 good.html（有视频且成功）
+    assert result['failed_count'] == 1  # bad.html 有视频但解析失败
     assert 'https://example.com/bad.html' in result['failed']
 
 
