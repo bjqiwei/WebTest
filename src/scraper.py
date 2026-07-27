@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime
 import hashlib
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED, as_completed
 from pathlib import Path
 import time
 from urllib.parse import urldefrag, urljoin, urlparse, unquote
@@ -1158,80 +1158,87 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
     analyze_dir = outdir / 'analyze'
     analyze_dir.mkdir(parents=True, exist_ok=True)
 
-    for idx, page in enumerate(raw_pages, start=1):
+    # ── 多线程提取 content_blocks ──
+    def _analyze_one(page):
+        """线程内执行：读取 HTML → extract_content_blocks → 计数。"""
         current_url = page['url']
-        if callable(progress_callback):
-            progress_callback(idx, total_known_html, current_url)
+        try:
+            content_type = page.get('content_type', '')
+            if HTML_CONTENT_TYPE_RE.search(content_type):
+                if page.get('html_path') is None:
+                    return {'url': current_url, 'error': 'html_path_is_null', 'video_count': 0, 'image_count': 0}
+            else:
+                return {'url': current_url,'error': 'not_html_content_type', 'video_count': 0, 'image_count': 0}
 
-        if page.get('html_path') is None:
-            analysis_failed_reasons[current_url] = 'html_path_is_null'
-                    # 更新 DB 中的统计值
+            src_html_path = Path(page['html_path'])
+            
+            html = src_html_path.read_text(encoding='utf-8')
+            blocks = extract_content_blocks(html, current_url)
+            video_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'video')
+            image_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'image')
+
+            return {
+                'url': current_url,
+                'html': html,
+                'content_blocks': blocks,
+                'video_count': video_count,
+                'image_count': image_count,
+                'content_type': content_type,
+                'html_path': src_html_path,
+                'error': None,
+            }
+        except Exception as e:
+            return {'url': current_url, 'error': str(e), 'video_count': 0, 'image_count': 0}
+
+    max_workers = min(8, len(raw_pages) or 1)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_analyze_one, page): page for page in raw_pages}
+
+        for idx, future in enumerate(as_completed(futures), start=1):
+            page = futures[future]
+            current_url = page['url']
+            if callable(progress_callback):
+                progress_callback(idx, total_known_html, current_url)
+
+            result = future.result()
+            video_count = result['video_count']
+            image_count = result['image_count']
+
+            if result['error']:
+                analysis_failed_reasons[current_url] = result['error']
+
+            # 只有包含视频的页面才保存 HTML + JSON
+            if video_count > 0:
+                try:
+                    timestamp = result['html_path'].stem.rsplit('_html_', 1)[-1]
+                    _save_page_output(
+                        current_url, result['html'], analyze_dir, len(result_pages) + 1, timestamp,
+                        content_blocks=result['content_blocks'],
+                    )
+                except Exception:
+                    analysis_failed_reasons[current_url] = 'save_output_error'
+                    continue
+
+                entry = {
+                    'url': current_url,
+                    'video_count': video_count,
+                    'image_count': image_count,
+                }
+
+                total_videos += video_count
+                total_media += image_count
+                result_pages.append(entry)
+
+            # 更新 DB 中的统计值
             if db_conn is not None:
                 try:
                     db_conn.execute(
                         "UPDATE pages SET video_count = ?, image_count = ? WHERE url = ?",
-                        (0, 0, current_url),
+                        (video_count, image_count, current_url),
                     )
                     db_conn.commit()
                 except Exception:
                     pass
-            continue
-
-        src_html_path = Path(page['html_path'])
-        content_type = page.get('content_type', '')
-
-        if HTML_CONTENT_TYPE_RE.search(content_type):
-            try:
-                html = src_html_path.read_text(encoding='utf-8')
-            except Exception:
-                analysis_failed_reasons[current_url] = 'html_read_error'
-                continue
-
-            # 先分析内容，获取视频/图片计数
-            try:
-                content_blocks = extract_content_blocks(html, current_url)
-            except Exception:
-                analysis_failed_reasons[current_url] = 'parse_error'
-                continue
-
-            video_count = sum(1 for b in content_blocks if isinstance(b, dict) and b.get('type') == 'video')
-            image_count = sum(1 for b in content_blocks if isinstance(b, dict) and b.get('type') == 'image')
-        else:
-            video_count = 0
-            image_count = 0
-
-        # 只有包含视频的页面才保存 HTML + JSON
-        if video_count > 0:
-            try:
-                timestamp = src_html_path.stem.rsplit('_html_', 1)[-1]
-                _save_page_output(
-                    current_url, html, analyze_dir, len(result_pages)+1, timestamp,
-                    content_blocks=content_blocks,
-                )
-            except Exception:
-                analysis_failed_reasons[current_url] = 'save_output_error'
-                continue
-
-            entry = {
-                'url': current_url,
-                'video_count': video_count,
-                'image_count': image_count,
-            }
-
-            total_videos += video_count
-            total_media += image_count
-            result_pages.append(entry)
-
-        # 更新 DB 中的统计值
-        if db_conn is not None:
-            try:
-                db_conn.execute(
-                    "UPDATE pages SET video_count = ?, image_count = ? WHERE url = ?",
-                    (video_count, image_count, current_url),
-                )
-                db_conn.commit()
-            except Exception:
-                pass
 
     if db_conn is not None:
         db_conn.close()
