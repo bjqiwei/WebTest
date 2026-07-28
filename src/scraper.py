@@ -1012,7 +1012,8 @@ def save_site_html(
             _flush_failed_pages_batch(conn, dirty_failed)
             dirty_failed.clear()
 
-    with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+    executor = ThreadPoolExecutor(max_workers=max_concurrency)
+    try:
         # 初始填满线程池
         while len(pending) < max_concurrency:
             if not _try_submit():
@@ -1090,6 +1091,11 @@ def save_site_html(
             while len(pending) < max_concurrency:
                 if not _try_submit():
                     break
+    except KeyboardInterrupt:
+        _log('抓取被用户中断，正在取消剩余任务...')
+        executor.shutdown(wait=False, cancel_futures=True)
+    finally:
+        executor.shutdown(wait=False)
 
             
 
@@ -1146,7 +1152,7 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
     """从页面列表读取已保存 HTML，逐一提取内容并输出 JSON，同时更新 DB 中的 video_count/image_count。"""
     analysis_failed_reasons = {}
     total_videos = 0
-    total_media = 0
+    total_image = 0
     total_known_html = len(raw_pages)
     result_pages = []
 
@@ -1191,7 +1197,8 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
             return {'url': current_url, 'error': str(e), 'video_count': 0, 'image_count': 0}
 
     max_workers = min(8, len(raw_pages) or 1)
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    try:
         futures = {executor.submit(_analyze_one, page): page for page in raw_pages}
 
         for idx, future in enumerate(as_completed(futures), start=1):
@@ -1226,7 +1233,7 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
                 }
 
                 total_videos += video_count
-                total_media += image_count
+                total_image += image_count
                 result_pages.append(entry)
 
             # 更新 DB 中的统计值
@@ -1239,6 +1246,11 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
                     db_conn.commit()
                 except Exception:
                     pass
+    except KeyboardInterrupt:
+        _log('分析被用户中断，正在取消剩余任务...')
+        executor.shutdown(wait=False, cancel_futures=True)
+    finally:
+        executor.shutdown(wait=False)
 
     if db_conn is not None:
         db_conn.close()
@@ -1247,7 +1259,7 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
         'start_url': start_url,
         'page_count': len(result_pages),
         'video_count': total_videos,
-        'image_count': total_media,
+        'image_count': total_image,
         'failed_count': len(analysis_failed_reasons),
         'failed_reasons': analysis_failed_reasons,
     }
