@@ -312,9 +312,11 @@ def _extract_video_items(soup: BeautifulSoup, base_url: str):
         description = _nearby_description(tag)
         items.append(
             {
+                'id': '',
                 'type': 'video',
-                'original_url': src,
+                'index': 0,
                 'tos_url': src,
+                'original_url': src,
                 'note': description,
                 'alt': '',
             }
@@ -372,9 +374,11 @@ def _media_from_tag(tag: Tag, base_url: str):
     alt = _clean_text(tag.get('alt', '')) if tag.name == 'img' else ''
 
     return {
+        'id': '',
         'type': media_type,
-        'original_url': src,
+        'index': 0,
         'tos_url': src,
+        'original_url': src,
         'note': note,
         'alt': alt,
     }
@@ -712,6 +716,14 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))"
         ")"
     )
+    # 为 video_count 添加索引，加速 analyze 阶段查询未分析页面
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pages_video_count ON pages(video_count)"
+        )
+    except Exception:
+        pass
+
     # 为已有 pages 表补充新增字段
     for col in ('video_count', 'image_count', 'links'):
         try:
@@ -1163,6 +1175,12 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
     db_conn = _init_db(_scrape_db_path(start_url, outdir))
     analyze_dir = outdir / 'analyze'
     analyze_dir.mkdir(parents=True, exist_ok=True)
+    # 清空 analyze_dir 目录下的所有文件和子目录
+    for item in analyze_dir.iterdir():
+        if item.is_dir():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
 
     # ── 多线程提取 content_blocks ──
     def _analyze_one(page):
