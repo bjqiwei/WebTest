@@ -415,7 +415,7 @@ def extract_content_blocks(html: str, base_url: str):
     video_index = 0
     image_index = 0
 
-    for tag in root.find_all(['h1', 'h2', 'h3', 'h4', 'p', 'li', 'video', 'iframe', 'img']):
+    for tag in root.find_all(['h1', 'h2', 'h3', 'h4', 'p', 'li', 'video', 'iframe', 'a', 'img']):
         if not isinstance(tag, Tag) or _is_in_noise_area(tag):
             continue
 
