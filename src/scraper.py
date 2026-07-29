@@ -32,7 +32,7 @@ NOISE_PARENT_TAGS = {
     'noscript',
 }
 
-NOISE_KEYWORDS = ('footer', 'cookie', 'consent', 'breadcrumb', 'share', 'related')
+NOISE_KEYWORDS = ('footer', 'cookie', 'consent', 'breadcrumb', 'share', 'related', 'language', 'lang-switcher')
 
 VIDEO_FILE_RE = re.compile(r'\.(mp4|m3u8|webm|ogg)(\?|$)', re.I)
 EMBED_RE = re.compile(r'youtube|youtu\.be|vimeo|player|wistia', re.I)
@@ -394,7 +394,7 @@ def extract_content_blocks(html: str, base_url: str):
     video_index = 0
     image_index = 0
 
-    for tag in root.find_all(['h1', 'h2', 'h3', 'h4', 'p', 'li', 'video', 'iframe', 'a', 'img']):
+    for tag in root.find_all(['h1', 'h2', 'h3', 'h4', 'p', 'li', 'video', 'iframe', 'img']):
         if not isinstance(tag, Tag) or _is_in_noise_area(tag):
             continue
 
@@ -415,6 +415,27 @@ def extract_content_blocks(html: str, base_url: str):
                 media['id'] = hashlib.md5(f"{base_url}|{key}|i{image_index}".encode('utf-8')).hexdigest()
                 blocks.append(media)
             continue
+
+        # 跳过纯链接导航项：<li> 内只有 <a> 子元素且文本较短（如语言选择器、菜单项）
+        if tag.name == 'li' and all(
+            child.name == 'a' or (isinstance(child, str) and not child.strip())
+            for child in tag.children
+        ):
+            link_text = _clean_text(tag.get_text(' ', strip=True))
+            if len(link_text) < 30:
+                continue
+
+        # 跳过内容完全由 <a> 链接构成的标签（如 "Protección | Auditoría | Transparencia"）
+        if tag.name in ('p', 'li'):
+            a_texts = [a.get_text(' ', strip=True) for a in tag.find_all('a') if a.get_text(' ', strip=True)]
+            if a_texts:
+                full_text = _clean_text(tag.get_text(' ', strip=True))
+                combined_a_text = ' '.join(a_texts)
+                # 去除链接组中常见的分隔符（|、•、/ 等）后再比较
+                sep_clean = re.sub(r'\s*[|•/]\s*', ' ', full_text)
+                sep_clean = _clean_text(sep_clean)
+                if _clean_text(combined_a_text) == sep_clean:
+                    continue
 
         text = _clean_text(tag.get_text(' ', strip=True))
         if len(text) < 2:
