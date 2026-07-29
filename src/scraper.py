@@ -49,6 +49,9 @@ _log_path: Path | None = None
 
 # 每个线程独立的 Playwright + Browser 缓存（Playwright 同步 API 非线程安全）
 _thread_local = threading.local()
+# 每个线程的页面计数，用于定期重启浏览器释放累积内存
+_thread_page_count: dict[int, int] = {}
+BROWSER_RESTART_EVERY_N_PAGES = 30
 
 
 def _get_thread_browser(cdp_url: str = '', headless: bool = True):
@@ -93,6 +96,24 @@ def _get_thread_context(cdp_url: str = '', headless: bool = True):
             ignore_https_errors=True, user_agent=DEFAULT_USER_AGENT
         )
     return _thread_local.context
+
+
+def _cleanup_thread_browser():
+    """释放当前线程的 Playwright browser 资源，回收内存。"""
+    if hasattr(_thread_local, 'browser') and _thread_local.browser is not None:
+        try:
+            _thread_local.browser.close()
+        except Exception:
+            pass
+        _thread_local.browser = None
+    if hasattr(_thread_local, 'context') and _thread_local.context is not None:
+        _thread_local.context = None
+    if hasattr(_thread_local, 'playwright') and _thread_local.playwright is not None:
+        try:
+            _thread_local.playwright.stop()
+        except Exception:
+            pass
+        _thread_local.playwright = None
 
 
 def set_log_file(path: Path):
@@ -581,6 +602,15 @@ def fetch_html_with_playwright(
         return page.content(), ctype
 
     use_cdp = bool(cdp_url)
+
+    # 非 CDP 模式下，定期重启浏览器以释放累积的内存（缓存、JS 堆等）
+    if not use_cdp:
+        tid = threading.current_thread().native_id
+        count = _thread_page_count.get(tid, 0) + 1
+        _thread_page_count[tid] = count
+        if count % BROWSER_RESTART_EVERY_N_PAGES == 0:
+            _log(f'线程累计抓取 {count} 页，重启浏览器释放内存')
+            _cleanup_thread_browser()
 
     # CDP：复用 thread-local browser + context，只开/关 tab
     browser = _get_thread_browser(cdp_url, headless)
@@ -1120,6 +1150,15 @@ def save_site_html(
     dirty_failed.clear()
     conn.close()
 
+    # 清理线程池中残留的 Playwright 资源（每个线程独立一份）
+    def _cleanup_worker():
+        _cleanup_thread_browser()
+
+    cleanup_executor = ThreadPoolExecutor(max_workers=max_concurrency)
+    for _ in range(max_concurrency):
+        cleanup_executor.submit(_cleanup_worker)
+    cleanup_executor.shutdown(wait=True)
+
     result = {
         'start_url': start_url,
         'saved_count': len(html_cache),
@@ -1161,7 +1200,10 @@ def analyze_saved_html(start_url: str, outdir: Path, progress_callback=None, pha
 
 
 def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_callback=None, start_url=None):
-    """从页面列表读取已保存 HTML，逐一提取内容并输出 JSON，同时更新 DB 中的 video_count/image_count。"""
+    """从页面列表读取已保存 HTML，逐一提取内容并输出 JSON，同时更新 DB 中的 video_count/image_count。
+    
+    使用有界并发 + 流式处理，避免一次性将所有 HTML 加载到内存中。
+    """
     analysis_failed_reasons = {}
     total_videos = 0
     total_image = 0
@@ -1182,88 +1224,125 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
         else:
             item.unlink()
 
-    # ── 多线程提取 content_blocks ──
+    # ── 多线程提取 content_blocks（流式，不一次性持有所有 future) ──
     def _analyze_one(page):
-        """线程内执行：读取 HTML → extract_content_blocks → 计数。"""
+        """线程内执行：读取 HTML → extract_content_blocks → 计数。
+        注意：不返回完整 HTML，只返回计数 + 有视频时的 content_blocks。
+        """
         current_url = page['url']
         try:
             content_type = page.get('content_type', '')
-            if HTML_CONTENT_TYPE_RE.search(content_type):
-                if page.get('html_path') is None:
-                    return {'url': current_url, 'error': 'html_path_is_null', 'video_count': 0, 'image_count': 0}
-            else:
-                return {'url': current_url,'error': 'not_html_content_type', 'video_count': 0, 'image_count': 0}
+            if not HTML_CONTENT_TYPE_RE.search(content_type):
+                return {'url': current_url, 'error': 'not_html_content_type', 'video_count': 0, 'image_count': 0}
+
+            if page.get('html_path') is None:
+                return {'url': current_url, 'error': 'html_path_is_null', 'video_count': 0, 'image_count': 0}
 
             src_html_path = Path(page['html_path'])
-            
+
             html = src_html_path.read_text(encoding='utf-8')
             blocks = extract_content_blocks(html, current_url)
             video_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'video')
             image_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'image')
 
-            return {
-                'url': current_url,
-                'html': html,
-                'content_blocks': blocks,
-                'video_count': video_count,
-                'image_count': image_count,
-                'content_type': content_type,
-                'html_path': src_html_path,
-                'error': None,
-            }
+            # 只有在有视频时才保留完整数据用于后续保存；否则立即释放 html
+            if video_count > 0:
+                return {
+                    'url': current_url,
+                    'html': html,
+                    'content_blocks': blocks,
+                    'video_count': video_count,
+                    'image_count': image_count,
+                    'content_type': content_type,
+                    'html_path': src_html_path,
+                    'error': None,
+                }
+            else:
+                return {
+                    'url': current_url,
+                    'video_count': video_count,
+                    'image_count': image_count,
+                    'error': None,
+                }
         except Exception as e:
             return {'url': current_url, 'error': str(e), 'video_count': 0, 'image_count': 0}
 
     max_workers = min(8, len(raw_pages) or 1)
     executor = ThreadPoolExecutor(max_workers=max_workers)
     try:
-        futures = {executor.submit(_analyze_one, page): page for page in raw_pages}
+        # 使用滑动窗口方式提交，只保留有限数量的 future，避免全部 HTML 同时驻留内存
+        pending_futures = {}
+        page_iter = iter(enumerate(raw_pages, start=1))
 
-        for idx, future in enumerate(as_completed(futures), start=1):
-            page = futures[future]
-            current_url = page['url']
-            if callable(progress_callback):
-                progress_callback(idx, total_known_html, current_url)
+        def _submit_next():
+            """从迭代器取下一个页面提交，返回是否成功提交。"""
+            try:
+                idx, page = next(page_iter)
+                future = executor.submit(_analyze_one, page)
+                pending_futures[future] = (idx, page['url'])
+                return True
+            except StopIteration:
+                return False
 
-            result = future.result()
-            video_count = result['video_count']
-            image_count = result['image_count']
+        # 初始填满线程池
+        for _ in range(max_workers):
+            if not _submit_next():
+                break
 
-            if result['error']:
-                analysis_failed_reasons[current_url] = result['error']
+        while pending_futures:
+            # 等待任意一个完成
+            done, _ = wait(pending_futures.keys(), return_when=FIRST_COMPLETED)
 
-            # 只有包含视频的页面才保存 HTML + JSON
-            if video_count > 0:
-                try:
-                    timestamp = result['html_path'].stem.rsplit('_html_', 1)[-1]
-                    _save_page_output(
-                        current_url, result['html'], analyze_dir, len(result_pages) + 1, timestamp,
-                        content_blocks=result['content_blocks'],
-                    )
-                except Exception:
-                    analysis_failed_reasons[current_url] = 'save_output_error'
-                    continue
+            for future in done:
+                idx, current_url = pending_futures.pop(future)
+                result = future.result()
+                # 立即释放 future 引用（通过 pop 后 future 变量即将被覆盖）
+                del future
 
-                entry = {
-                    'url': current_url,
-                    'video_count': video_count,
-                    'image_count': image_count,
-                }
+                if callable(progress_callback):
+                    progress_callback(idx, total_known_html, current_url)
 
-                total_videos += video_count
-                total_image += image_count
-                result_pages.append(entry)
+                video_count = result.get('video_count', 0)
+                image_count = result.get('image_count', 0)
 
-            # 更新 DB 中的统计值
-            if db_conn is not None:
-                try:
-                    db_conn.execute(
-                        "UPDATE pages SET video_count = ?, image_count = ? WHERE url = ?",
-                        (video_count, image_count, current_url),
-                    )
-                    db_conn.commit()
-                except Exception:
-                    pass
+                if result.get('error'):
+                    analysis_failed_reasons[current_url] = result['error']
+
+                # 只有包含视频的页面才保存 HTML + JSON
+                if video_count > 0:
+                    try:
+                        timestamp = result['html_path'].stem.rsplit('_html_', 1)[-1]
+                        _save_page_output(
+                            current_url, result['html'], analyze_dir, len(result_pages) + 1, timestamp,
+                            content_blocks=result['content_blocks'],
+                        )
+                    except Exception:
+                        analysis_failed_reasons[current_url] = 'save_output_error'
+                    else:
+                        entry = {
+                            'url': current_url,
+                            'video_count': video_count,
+                            'image_count': image_count,
+                        }
+                        total_videos += video_count
+                        total_image += image_count
+                        result_pages.append(entry)
+
+                # 更新 DB 中的统计值
+                if db_conn is not None:
+                    try:
+                        db_conn.execute(
+                            "UPDATE pages SET video_count = ?, image_count = ? WHERE url = ?",
+                            (video_count, image_count, current_url),
+                        )
+                        db_conn.commit()
+                    except Exception:
+                        pass
+
+            # 补充新任务，保持线程池满载
+            while len(pending_futures) < max_workers:
+                if not _submit_next():
+                    break
     except KeyboardInterrupt:
         _log('分析被用户中断，正在取消剩余任务...')
         executor.shutdown(wait=False, cancel_futures=True)
