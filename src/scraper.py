@@ -35,6 +35,12 @@ NOISE_PARENT_TAGS = {
 
 NOISE_KEYWORDS = ('footer', 'cookie', 'consent', 'breadcrumb', 'share', 'related', 'language', 'lang-switcher')
 
+CONTENT_CUTOFF_MARKERS = (
+    # 页面中出现该标记后，其后的内容块全部忽略（例如视频版权/署名行等）
+    'Noticias y testimonios de profesionales',
+    'Novedades',
+)
+
 VIDEO_FILE_RE = re.compile(r'\.(mp4|m3u8|webm|ogg)(\?|$)', re.I)
 EMBED_RE = re.compile(r'youtube|youtu\.be|vimeo|player|wistia', re.I)
 IMAGE_FILE_RE = re.compile(r'\.(png|jpe?g|webp|gif|bmp|svg)(\?|$)', re.I)
@@ -257,6 +263,29 @@ def _is_in_noise_area(tag: Tag) -> bool:
     return False
 
 
+def _is_button_like(tag: Tag) -> bool:
+    """判断是否为按钮元素（<button>、role="button" 或带按钮样式 class 的 <a> 等）。
+
+    按钮内容（如 "Doná ahora" 捐赠按钮）不应作为正文提取。
+    """
+    if tag.name == 'button':
+        return True
+    if tag.get('role') == 'button':
+        return True
+    for cls in tag.get('class') or []:
+        cl = cls.lower()
+        # 常见按钮 class：btn / btn-* / button / cta-button / donate*
+        if cl == 'btn' or cl.startswith('btn-'):
+            return True
+        if cl.startswith('button'):
+            return True
+        if cl == 'cta' or cl.startswith('cta-'):
+            return True
+        if cl.startswith('donate'):
+            return True
+    return False
+
+
 def _clean_text(text: str) -> str:
     return re.sub(r'\s+', ' ', text or '').strip()
 
@@ -406,17 +435,98 @@ def _media_from_tag(tag: Tag, base_url: str):
     }
 
 
-def extract_content_blocks(html: str, base_url: str):
-    """从 HTML 中提取文本块、视频和图片。视频和图片各自拥有独立的序号。"""
+def _is_after_in_doc(tag_a: Tag, tag_b: Tag) -> bool:
+    """判断 tag_a 是否在文档顺序上位于 tag_b 之后。"""
+    a_chain = [tag_a]
+    a_chain.extend(tag_a.parents)
+
+    # 找到最低公共祖先（LCA）
+    b_ids = {id(p) for p in [tag_b] + list(tag_b.parents)}
+    lca = next((p for p in a_chain if id(p) in b_ids), None)
+    if lca is None:
+        return False
+
+    # LCA 到 tag_a / tag_b 路径上的直接子节点
+    child_a = tag_a
+    for p in a_chain:
+        if p is lca:
+            break
+        child_a = p
+
+    child_b = tag_b
+    for p in [tag_b] + list(tag_b.parents):
+        if p is lca:
+            break
+        child_b = p
+
+    if child_a is child_b:
+        return False
+
+    # 在 LCA 的直接子节点中按文档顺序比较
+    for child in lca.children:
+        if child is child_b:
+            return True
+        if child is child_a:
+            return False
+    return False
+
+
+def _find_content_cutoff_index(candidates, soup, cutoff_markers):
+    """返回截断点下标（切片用 candidates[:idx]）；未命中返回 None。
+
+    - 标记元素本身就是候选标签（如正文里的 <h2>Novedades</h2>）：返回该标记的下标，
+      使标记本身及其后的内容都被排除。
+    - 标记元素不是候选标签（如视频版权署名行 <span>）：返回第一个位于标记之后的
+      候选标签下标，标记之前的内容（如视频）保留。
+    """
+    marker_el = None
+    for node in soup.find_all(
+        string=lambda s: any(m in s for m in cutoff_markers)
+    ):
+        # 仅匹配普通文本节点（排除注释/CDATA），取文档顺序最早的一处；
+        # 跳过位于导航/页眉/页脚等噪音区域的标记（例如菜单里的 "Novedades"）
+        if (type(node) is NavigableString and isinstance(node.parent, Tag)
+                and not _is_in_noise_area(node.parent)):
+            marker_el = node.parent
+            break
+    if marker_el is None:
+        return None
+
+    for idx, tag in enumerate(candidates):
+        if tag is marker_el:
+            return idx
+        if _is_after_in_doc(tag, marker_el):
+            return idx
+    return None
+
+
+def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
+    """从 HTML 中提取文本块、视频和图片。视频和图片各自拥有独立的序号。
+
+    cutoff_markers: 若页面中出现这些标记，则标记之后的所有内容块都会被忽略。
+    默认使用 CONTENT_CUTOFF_MARKERS；传入空元组可关闭该行为。
+    """
+    if cutoff_markers is None:
+        cutoff_markers = CONTENT_CUTOFF_MARKERS
+
     soup = BeautifulSoup(html, 'html.parser')
     root = soup.find('main') or soup.body or soup
+
+    tags = ['h1', 'h2', 'h3', 'h4', 'p', 'li', 'video', 'iframe', 'a', 'img']
+    candidates = root.find_all(tags)
+
+    # 内容截断：找到截断点，丢弃标记（及其后的全部内容）
+    if cutoff_markers and any(m in html for m in cutoff_markers):
+        cutoff_index = _find_content_cutoff_index(candidates, soup, cutoff_markers)
+        if cutoff_index is not None:
+            candidates = candidates[:cutoff_index -1 if cutoff_index > 0 else 0]
 
     blocks = []
     seen_urls = set()
     video_index = 0
     image_index = 0
 
-    for tag in root.find_all(['h1', 'h2', 'h3', 'h4', 'p', 'li', 'video', 'iframe', 'a', 'img']):
+    for tag in candidates:
         if not isinstance(tag, Tag) or _is_in_noise_area(tag):
             continue
 
@@ -436,6 +546,10 @@ def extract_content_blocks(html: str, base_url: str):
                 media['index'] = image_index
                 media['id'] = hashlib.md5(f"{base_url}|{key}|i{image_index}".encode('utf-8')).hexdigest()
                 blocks.append(media)
+            continue
+
+        # 按钮内容不提取（如 "Doná ahora" 捐赠按钮）
+        if _is_button_like(tag):
             continue
 
         # 跳过纯链接导航项：<li> 内只有 <a> 子元素且文本较短（如语言选择器、菜单项）
