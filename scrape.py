@@ -20,10 +20,19 @@ def _print_summary(result):
     print(f'{result["page_count"]}个页面，{result.get("image_count", 0)}个媒体元素')
     print(f'视频数: {result["video_count"]}')
     print(f'失败数: {result.get("failed_count", 0)}')
+    if result.get('deleted_html_count'):
+        print(f'已删除无视频HTML: {result["deleted_html_count"]}')
     if result.get('failed_reasons'):
         print('失败示例:')
         for u, reason in list(result['failed_reasons'].items())[:3]:
             print(f'- {u} -> {reason}')
+
+
+def _add_delete_no_video_arg(parser):
+    parser.add_argument(
+        '--delete-html-no-video', action='store_true',
+        help='Analyze 后删除不含视频页面的本地 HTML 文件（SQLite 记录保留）',
+    )
 
 
 def _add_shared_fetch_args(parser):
@@ -54,6 +63,7 @@ def main():
     scrape_parser = subparsers.add_parser('scrape', help='Save HTML and analyze in one command')
     scrape_parser.add_argument('url', help='Target URL to scrape')
     _add_shared_fetch_args(scrape_parser)
+    _add_delete_no_video_arg(scrape_parser)
 
     save_parser = subparsers.add_parser('save', help='Only save crawled HTML files')
     save_parser.add_argument('url', help='Target URL to crawl and save as HTML')
@@ -62,6 +72,7 @@ def main():
     analyze_parser = subparsers.add_parser('analyze', help='Analyze previously saved HTML files')
     analyze_parser.add_argument('url', help='Start URL (used to locate the SQLite DB)')
     _add_shared_fetch_args(analyze_parser)
+    _add_delete_no_video_arg(analyze_parser)
 
     parser.set_defaults(command='scrape')
     args = parser.parse_args()
@@ -69,7 +80,11 @@ def main():
     if args.command == 'analyze':
         outdir = Path(args.out)
         try:
-            result = analyze_saved_html(args.url, outdir, progress_callback=_progress, phase_callback=_phase)
+            result = analyze_saved_html(
+                args.url, outdir,
+                progress_callback=_progress, phase_callback=_phase,
+                delete_html_no_video=args.delete_html_no_video,
+            )
         except FileNotFoundError as e:
             print(f'错误: {e}')
             sys.exit(1)
@@ -110,6 +125,7 @@ def main():
         playwright_cdp_url=args.cdp_url.strip(),
         progress_callback=_progress,
         phase_callback=_phase,
+        delete_html_no_video=args.delete_html_no_video,
     )
     _print_summary(result)
 

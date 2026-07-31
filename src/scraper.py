@@ -13,6 +13,7 @@ from urllib.parse import urldefrag, urljoin, urlparse, unquote
 
 import threading
 
+import shutil
 import subprocess
 
 import requests
@@ -796,9 +797,9 @@ def _load_html_cache_from_db(start_url: str, outdir: Path) -> list:
     try:
         conn = sqlite3.connect(str(db_path))
         conn.execute("PRAGMA journal_mode=WAL")
-        cursor = conn.execute("SELECT url, html_path, content_type FROM pages")
-        cache = [{'url': url, 'html_path': html_path, 'content_type': content_type}
-                 for url, html_path, content_type in cursor]
+        cursor = conn.execute("SELECT url, html_path, content_type, video_count FROM pages")
+        cache = [{'url': url, 'html_path': html_path, 'content_type': content_type, 'video_count': video_count}
+                 for url, html_path, content_type, video_count in cursor]
         conn.close()
         return cache
     except Exception:
@@ -936,6 +937,11 @@ def save_site_html(
         if not HTML_CONTENT_TYPE_RE.search(ctype):
             visited.add(cached_url)
             _log(f'跳过非 HTML 缓存 URL: {cached_url} (content_type={ctype})')
+            continue
+        # 已分析为无视频的页面（video_count=0）：本地 HTML 可能已被删除，无需再下载
+        if cached.get('video_count', -1) == 0:
+            visited.add(cached_url)
+            _log(f'跳过已分析且无视频的缓存 URL: {cached_url}')
             continue
         if cached['html_path'] is None:
             #_log(f'缓存记录 html_path 为空: {cached_url}')
@@ -1207,8 +1213,12 @@ def _load_unanalyzed_pages_from_db(start_url: str, outdir: Path) -> list:
         return []
 
 
-def analyze_saved_html(start_url: str, outdir: Path, progress_callback=None, phase_callback=None):
-    """读取尚未分析的页面（video_count == -1 && image_count == -1），逐一提取内容并输出 JSON。"""
+def analyze_saved_html(start_url: str, outdir: Path, progress_callback=None, phase_callback=None, delete_html_no_video=False):
+    """读取尚未分析的页面（video_count == -1 && image_count == -1），逐一提取内容并输出 JSON。
+
+    delete_html_no_video: 为 True 时，分析完成后删除不含视频页面的本地 HTML 文件，
+    但 SQLite 中的记录保留（video_count 写为 0，不会重复分析）。
+    """
     pages = _load_unanalyzed_pages_from_db(start_url, outdir)
     _log(f'Loaded {len(pages)} unanalyzed pages from SQLite.')
     return _analyze_pages_from_cache(
@@ -1216,11 +1226,12 @@ def analyze_saved_html(start_url: str, outdir: Path, progress_callback=None, pha
         progress_callback=progress_callback,
         phase_callback=phase_callback,
         start_url=start_url,
+        delete_html_no_video=delete_html_no_video,
     )
 
 
 
-def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_callback=None, start_url=None):
+def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_callback=None, start_url=None, delete_html_no_video=False):
     """从页面列表读取已保存 HTML，逐一提取内容并输出 JSON，同时更新 DB 中的 video_count/image_count。
     
     使用有界并发 + 流式处理，避免一次性将所有 HTML 加载到内存中。
@@ -1230,6 +1241,7 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
     total_image = 0
     total_known_html = len(raw_pages)
     result_pages = []
+    deleted_html_count = 0
 
     if callable(phase_callback):
         phase_callback('analyzing_html')
@@ -1283,6 +1295,7 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
                     'url': current_url,
                     'video_count': video_count,
                     'image_count': image_count,
+                    'html_path': src_html_path,
                     'error': None,
                 }
         except Exception as e:
@@ -1328,6 +1341,19 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
 
                 if result.get('error'):
                     analysis_failed_reasons[current_url] = result['error']
+
+                # 可选：删除不含视频页面的本地 HTML 文件（DB 记录保留）
+                if delete_html_no_video and video_count == 0 and not result.get('error'):
+                    html_path = result.get('html_path')
+                    if html_path:
+                        try:
+                            hp = Path(html_path)
+                            if hp.exists():
+                                hp.unlink()
+                                deleted_html_count += 1
+                                _log(f'删除无视频页面的本地 HTML: {current_url}')
+                        except Exception:
+                            pass
 
                 # 只有包含视频的页面才保存 HTML + JSON
                 if video_count > 0:
@@ -1380,6 +1406,7 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
         'image_count': total_image,
         'failed_count': len(analysis_failed_reasons),
         'failed_reasons': analysis_failed_reasons,
+        'deleted_html_count': deleted_html_count,
     }
     return summary
 
@@ -1396,6 +1423,7 @@ def scrape_site(
     playwright_cdp_url: str = '',
     progress_callback=None,
     phase_callback=None,
+    delete_html_no_video=False,
 ):
     save_result = save_site_html(
         url,
@@ -1415,6 +1443,7 @@ def scrape_site(
         outdir,
         progress_callback=progress_callback,
         phase_callback=phase_callback,
+        delete_html_no_video=delete_html_no_video,
     )
     summary = {
         'start_url': url,
@@ -1425,5 +1454,6 @@ def scrape_site(
         'image_count': analyze_result.get('image_count', 0),
         'failed': list(analyze_result.get('failed_reasons', {}).keys()),
         'failed_reasons': analyze_result.get('failed_reasons', {}),
+        'deleted_html_count': analyze_result.get('deleted_html_count', 0),
     }
     return summary
