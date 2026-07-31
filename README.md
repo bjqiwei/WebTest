@@ -31,6 +31,12 @@ python scrape.py save https://example.com -o output
 python scrape.py analyze https://example.com -o output
 ```
 
+分析完成后，如需删除不含视频页面的本地 HTML（保留 SQLite 记录）：
+
+```bash
+python scrape.py analyze https://example.com -o output --delete-html-no-video
+```
+
 ## 示例
 
 **单页面抓取：**
@@ -77,6 +83,7 @@ python scrape.py save https://www.unicef.org -o d:\unicef --all --renderer playw
 | `--wait-seconds` | Playwright 页面加载后的额外等待秒数（默认 5） |
 | `--cdp-url` | 连接到现有 Chrome 浏览器（例如 `http://127.0.0.1:9222`） |
 | `--concurrency` | 并发抓取线程数（默认 1） |
+| `--delete-html-no-video` | （`analyze`/`scrape`）分析后删除不含视频页面的本地 HTML 文件，SQLite 记录保留 |
 
 ## 输出说明
 
