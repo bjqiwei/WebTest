@@ -39,6 +39,7 @@ CONTENT_CUTOFF_MARKERS = (
     # 页面中出现该标记后，其后的内容块全部忽略（例如视频版权/署名行等）
     'Noticias y testimonios de profesionales',
     'Novedades',
+    '了解更多',
 )
 
 VIDEO_FILE_RE = re.compile(r'\.(mp4|m3u8|webm|ogg)(\?|$)', re.I)
