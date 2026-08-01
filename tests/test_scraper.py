@@ -221,6 +221,124 @@ def test_extract_content_blocks_allows_images_inside_form():
     assert media_items[0]['original_url'] == 'https://example.com/inside-form.webp'
 
 
+def test_extract_content_blocks_truncates_after_cutoff_marker():
+    """命中 CONTENT_CUTOFF_MARKERS 后，其后的内容块全部忽略，标记本身的内容（视频）保留。"""
+    html = '''
+    <html>
+      <body>
+        <main>
+          <h1>Careers</h1>
+          <p>Work with us</p>
+          <figure>
+            <iframe src="https://www.youtube-nocookie.com/embed/5r3gIPTuaik"></iframe>
+            <figcaption><span class="note m-credit">UNICEF Division of Human Resources</span></figcaption>
+          </figure>
+          <h2>Noticias y testimonios de profesionales</h2>
+          <p>This content should be ignored.</p>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://www.unicef.org/careers/es')
+    texts = [b for b in blocks if isinstance(b, str)]
+    assert 'Careers' in texts
+    assert 'Work with us' in texts
+    assert 'Noticias y testimonios de profesionales' not in texts
+    assert 'This content should be ignored.' not in texts
+    videos = [b for b in blocks if isinstance(b, dict) and b['type'] == 'video']
+    assert len(videos) == 1
+    assert videos[0]['note'] == 'UNICEF Division of Human Resources'
+
+
+def test_extract_content_blocks_cutoff_can_be_disabled():
+    """传入 cutoff_markers=() 时关闭截断，标记之后的内容仍被保留。"""
+    html = '''
+    <html>
+      <body>
+        <main>
+          <h1>Careers</h1>
+          <p>UNICEF Division of Human Resources</p>
+          <h2>After marker</h2>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com', cutoff_markers=())
+    assert 'After marker' in blocks
+
+
+def test_extract_content_blocks_no_marker_no_truncation():
+    """页面不含截断标记时，行为与之前一致（全部保留）。"""
+    html = '''
+    <html>
+      <body>
+        <main>
+          <h1>Careers</h1>
+          <p>Everything should be kept</p>
+          <h2>Second section</h2>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com')
+    texts = [b for b in blocks if isinstance(b, str)]
+    assert 'Everything should be kept' in texts
+    assert 'Second section' in texts
+
+
+def test_extract_content_blocks_cutoff_ignores_marker_in_noise_area():
+    """截断标记出现在导航/页眉等噪音区域时不触发截断，只有正文中的标记才触发。"""
+    html = '''
+    <html>
+      <body>
+        <header>
+          <nav><ul><li><a href="/novedades"><span>Novedades</span></a></li></ul></nav>
+        </header>
+        <main>
+          <h1>Title</h1>
+          <iframe src="https://www.youtube-nocookie.com/embed/abc123"></iframe>
+          <h2>Novedades</h2>
+          <p>This is the news section, should be cut.</p>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com', cutoff_markers=('Novedades',))
+    texts = [b for b in blocks if isinstance(b, str)]
+    # 导航菜单里的 "Novedades" 不应触发截断：正文与视频保留
+    assert 'Title' in texts
+    videos = [b for b in blocks if isinstance(b, dict) and b['type'] == 'video']
+    assert len(videos) == 1
+    # 正文中的 "Novedades" 标题之后的新闻内容被截断
+    assert 'This is the news section, should be cut.' not in texts
+
+
+def test_extract_content_blocks_skips_button_content():
+    """按钮内容（<button> 或带 btn/cta-button class 的 <a>）不应提取。"""
+    html = '''
+    <html>
+      <body>
+        <main>
+          <h1>Title</h1>
+          <p>Real paragraph content.</p>
+          <a href="https://help.example.org/dona" class="btn btn-donate cta-button">Doná ahora</a>
+          <p>Another paragraph.</p>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.org')
+    texts = [b for b in blocks if isinstance(b, str)]
+    assert 'Real paragraph content.' in texts
+    assert 'Another paragraph.' in texts
+    assert not any('Doná ahora' in t for t in texts), '按钮文本不应被提取'
+
+
 def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
     pages = {
         'https://example.com/': '''
@@ -498,3 +616,108 @@ def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
     assert second['saved_count'] == 2
     assert second['failed_count'] == 0
     assert set(_db_urls()) == {'https://example.com/', 'https://example.com/a.html'}
+
+
+def _seed_analyze_pages(tmp_path):
+    """构造两个已保存页面（一个含视频、一个无视频）并写入 SQLite（video_count=-1）。"""
+    import sqlite3
+    from src.scraper import _scrape_db_path, _init_db
+
+    start_url = 'https://example.com'
+    video_html = '''<html><body><main>
+      <h1>With video</h1>
+      <iframe src="https://www.youtube-nocookie.com/embed/5r3gIPTuaik"></iframe>
+    </main></body></html>'''
+    novideo_html = '<html><body><main><h1>No video</h1><p>text only</p></main></body></html>'
+
+    html_dir = tmp_path / 'pages'
+    html_dir.mkdir(exist_ok=True)
+    video_file = html_dir / 'video_page.html'
+    novideo_file = html_dir / 'novideo_page.html'
+    video_file.write_text(video_html, encoding='utf-8')
+    novideo_file.write_text(novideo_html, encoding='utf-8')
+
+    db_path = _scrape_db_path(start_url, tmp_path)
+    conn = _init_db(db_path)
+    conn.executemany(
+        "INSERT OR REPLACE INTO pages (url, html_path, content_type, video_count, image_count)"
+        " VALUES (?, ?, ?, -1, -1)",
+        [
+            ('https://example.com/video', str(video_file), 'text/html'),
+            ('https://example.com/novideo', str(novideo_file), 'text/html'),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    return start_url, db_path, video_file, novideo_file
+
+
+def test_analyze_delete_html_no_video_keeps_db_records(tmp_path):
+    """delete_html_no_video=True：删除无视频页面的本地 HTML，但 DB 记录保留。"""
+    import sqlite3
+
+    start_url, db_path, video_file, novideo_file = _seed_analyze_pages(tmp_path)
+
+    result = scraper_module.analyze_saved_html(start_url, tmp_path, delete_html_no_video=True)
+
+    assert result['deleted_html_count'] == 1
+    assert video_file.exists(), '含视频页面的 HTML 不应被删除'
+    assert not novideo_file.exists(), '无视频页面的 HTML 应被删除'
+
+    conn = sqlite3.connect(str(db_path))
+    rows = dict(conn.execute("SELECT url, video_count FROM pages"))
+    conn.close()
+    assert set(rows) == {'https://example.com/video', 'https://example.com/novideo'}
+    assert rows['https://example.com/video'] == 1
+    assert rows['https://example.com/novideo'] == 0
+
+
+def test_analyze_keeps_html_by_default(tmp_path):
+    """默认（delete_html_no_video=False）不删除任何本地 HTML。"""
+    start_url, db_path, video_file, novideo_file = _seed_analyze_pages(tmp_path)
+
+    result = scraper_module.analyze_saved_html(start_url, tmp_path)
+
+    assert result['deleted_html_count'] == 0
+    assert video_file.exists()
+    assert novideo_file.exists(), '默认不应删除无视频页面的 HTML'
+
+
+def test_save_skips_no_video_pages_with_deleted_html(monkeypatch, tmp_path):
+    """video_count=0 的页面即使本地 HTML 已被删除，save 时也不会重新下载。"""
+    import sqlite3
+    from src.scraper import _scrape_db_path, _init_db
+
+    start_url = 'https://example.com'
+    html_dir = tmp_path / 'pages'
+    html_dir.mkdir(exist_ok=True)
+    page_a_file = html_dir / 'a.html'
+    page_a_file.write_text('<html><body><a href="/b">to B</a></body></html>', encoding='utf-8')
+
+    db_path = _scrape_db_path(start_url, tmp_path)
+    conn = _init_db(db_path)
+    conn.executemany(
+        "INSERT OR REPLACE INTO pages (url, html_path, content_type, video_count, image_count)"
+        " VALUES (?, ?, ?, ?, ?)",
+        [
+            # A 页面本地文件存在，链接到 B；尚未分析（video_count=-1）
+            ('https://example.com/', str(page_a_file), 'text/html', -1, -1),
+            # B 页面已分析为无视频（video_count=0），本地 HTML 已被删除
+            ('https://example.com/b', str(html_dir / 'b_gone.html'), 'text/html', 0, 0),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    fetched = []
+
+    def fake_fetch(url, **kwargs):
+        fetched.append(url)
+        return {'html': '<html><body><p>x</p></body></html>', 'content_type': 'text/html'}
+
+    monkeypatch.setattr('src.scraper.fetch_html', fake_fetch)
+
+    scraper_module.save_site_html(start_url, tmp_path, max_depth=1, max_pages=10)
+
+    # B 不应被重新下载（video_count=0 代表无需再下载）
+    assert 'https://example.com/b' not in fetched
