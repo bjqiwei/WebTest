@@ -735,6 +735,8 @@ def fetch_html_with_playwright(
                 page.wait_for_timeout(1000)
                 if not _is_challenge_or_block_page(page.content()):
                     break
+        else:
+            page.wait_for_timeout(1000)
 
         return page.content(), ctype
 
