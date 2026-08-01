@@ -630,7 +630,8 @@ def _is_challenge_or_block_page(html: str) -> bool:
         '正在进行安全验证',
         '请验证您是真人',
         '安全服务防护恶意自动程序',
-        'http error 400'
+        'http error 400',
+        '页面没有找到',
     )
     # Do not treat generic "cloudflare" mentions as challenge pages;
     # many normal sites include Cloudflare assets and would be false positives.
@@ -725,16 +726,7 @@ def fetch_html_with_playwright(
             _log(f'等待 DOM 加载超时: {url}')
             return '', ctype
 
-        if _is_challenge_or_block_page(page.content()):
-            challenge_wait_seconds = max(10.0, wait_seconds)
-            challenge_deadline = time.time() + challenge_wait_seconds
-            _log(f'检测到挑战页，额外最多等待{challenge_wait_seconds:.1f}秒: {url}')
-            while time.time() < challenge_deadline:
-                if _try_click_challenge_checkbox(page):
-                    _log(f'已尝试自动勾选安全验证: {url}')
-                page.wait_for_timeout(1000)
-                if not _is_challenge_or_block_page(page.content()):
-                    break
+        page.wait_for_timeout(2000)
 
         return page.content(), ctype
 
