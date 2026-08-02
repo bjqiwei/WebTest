@@ -517,7 +517,9 @@ def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
     if cutoff_markers and any(m in html for m in cutoff_markers):
         cutoff_index = _find_content_cutoff_index(candidates, soup, cutoff_markers)
         if cutoff_index is not None:
-            candidates = candidates[:cutoff_index -1 if cutoff_index > 0 else 0]
+            if cutoff_index > 0:
+                cutoff_index -= 1
+            candidates = candidates[:cutoff_index]
 
     blocks = []
     seen_urls = set()
