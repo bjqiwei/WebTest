@@ -511,7 +511,9 @@ def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
     tags = ['h1', 'h2', 'h3', 'h4', 'p', 'li', 'video', 'iframe', 'a', 'img']
     candidates = root.find_all(tags)
 
-    # 内容截断：找到截断点，丢弃标记（及其后的全部内容）
+    # 内容截断：找到截断点，丢弃标记（及其后的全部内容）。
+    # _find_content_cutoff_index() 已返回合适的切片下标：标记本身是候选时返回其下标
+    # （连标记一起排除），标记不是候选时返回其后第一个候选下标（如视频版权行场景保留视频）。
     if cutoff_markers and any(m in html for m in cutoff_markers):
         cutoff_index = _find_content_cutoff_index(candidates, soup, cutoff_markers)
         if cutoff_index is not None:
@@ -1384,6 +1386,8 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
             src_html_path = Path(page['html_path'])
 
             html = src_html_path.read_text(encoding='utf-8')
+            if _is_challenge_or_block_page(html):
+                return {'url': current_url, 'error': 'challenge_or_block', 'video_count': 0, 'image_count': 0}
             blocks = extract_content_blocks(html, current_url)
             video_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'video')
             image_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'image')
