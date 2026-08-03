@@ -623,6 +623,7 @@ def _is_challenge_or_block_page(html: str) -> bool:
         '正在进行安全验证',
         '请验证您是真人',
         '安全服务防护恶意自动程序',
+        'too many requests',
         '503 service temporarily unavailable',
     )
     # Do not treat generic "cloudflare" mentions as challenge pages;
