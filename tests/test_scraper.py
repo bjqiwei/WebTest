@@ -161,7 +161,8 @@ def test_extract_content_blocks_with_image_and_video():
     assert media_items[1]['index'] == 1  # video 独立序号
 
 
-def test_extract_content_blocks_excludes_related_section():
+def test_extract_content_blocks_keeps_related_section():
+    """'related' 已移出 NOISE_KEYWORDS：相关阅读区域作为有效内容保留。"""
     html = '''
     <html>
       <body>
@@ -180,8 +181,8 @@ def test_extract_content_blocks_excludes_related_section():
     blocks = extract_content_blocks(html, 'https://example.com/page')
     assert 'Main title' in blocks
     assert 'Main content' in blocks
-    assert 'Related' not in blocks
-    assert 'Related article' not in blocks
+    assert 'Related' in blocks
+    assert 'Related article' in blocks
 
 
 def test_extract_content_blocks_not_blocked_by_body_navigation_class():
@@ -222,7 +223,10 @@ def test_extract_content_blocks_allows_images_inside_form():
 
 
 def test_extract_content_blocks_truncates_after_cutoff_marker():
-    """命中 CONTENT_CUTOFF_MARKERS 后，其后的内容块全部忽略，标记本身的内容（视频）保留。"""
+    """命中截断标记后，其后的内容块全部忽略，标记本身的内容（视频）保留。
+
+    显式传入 cutoff_markers 测试截断机制（全局 CONTENT_CUTOFF_MARKERS 现为空）。
+    """
     html = '''
     <html>
       <body>
@@ -240,7 +244,10 @@ def test_extract_content_blocks_truncates_after_cutoff_marker():
     </html>
     '''
 
-    blocks = extract_content_blocks(html, 'https://www.unicef.org/careers/es')
+    blocks = extract_content_blocks(
+        html, 'https://www.unicef.org/careers/es',
+        cutoff_markers=('Noticias y testimonios de profesionales',),
+    )
     texts = [b for b in blocks if isinstance(b, str)]
     assert 'Careers' in texts
     assert 'Work with us' in texts
@@ -388,7 +395,8 @@ def test_scrape_site_follows_header_nav_links(tmp_path, monkeypatch):
     monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'text/html'})
 
     result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
-    assert result['page_count'] == 2
+    # page_count 只统计含视频的页面；两页均无视频，用 saved_count 验证抓取数量
+    assert result['saved_count'] == 2
     assert result['failed_count'] == 0
 
 
@@ -402,7 +410,8 @@ def test_scrape_site_unlimited_depth_and_pages(tmp_path, monkeypatch):
     monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'text/html'})
 
     result = scrape_site('https://example.com', tmp_path, max_depth=-1, max_pages=0)
-    assert result['page_count'] == 3
+    # 页面均无视频，page_count 为 0；用 saved_count 验证全部抓取
+    assert result['saved_count'] == 3
 
 
 def test_scrape_site_skip_parse_error_and_continue(tmp_path, monkeypatch):
@@ -424,7 +433,8 @@ def test_scrape_site_skip_parse_error_and_continue(tmp_path, monkeypatch):
     monkeypatch.setattr('src.scraper._save_page_output', flaky_save)
 
     result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
-    assert result['page_count'] == 2  # /（无视频）和 good.html（有视频且成功）
+    # 仅 good.html 有视频且保存成功 → page_count=1；bad.html 保存失败记入 failed
+    assert result['page_count'] == 1
     assert result['failed_count'] == 1  # bad.html 有视频但解析失败
     assert 'https://example.com/bad.html' in result['failed']
 
@@ -465,7 +475,8 @@ def test_fetch_html_auto_fallback_to_playwright(monkeypatch):
         status_code = 200
         encoding = 'utf-8'
         apparent_encoding = 'utf-8'
-        text = '<html><title>Just a moment...</title></html>'
+        # 包含当前 strong_markers 之一（checking your browser）以触发 Playwright 回退
+        text = '<html><title>Just a moment...</title><body>checking your browser</body></html>'
         headers = {'content-type': 'text/html; charset=utf-8'}
 
         def raise_for_status(self):
@@ -491,7 +502,8 @@ def test_challenge_detector_not_triggered_by_generic_cloudflare_text():
 def test_challenge_detector_triggered_by_cloudflare_challenge_markers():
     html = '''
     <html><head><title>Just a moment...</title></head><body>
-      <script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"></script>
+      <meta name="cf-browser-verification" content="abc">
+      <script src="/cdn-cgi/browser-verification"></script>
     </body></html>
     '''
     assert scraper_module._is_challenge_or_block_page(html) is True
@@ -547,12 +559,14 @@ def test_scrape_site_progress_uses_fixed_total(monkeypatch, tmp_path):
         progress_callback=callback,
     )
 
-    assert result['page_count'] == 3
-    assert [p[0] for p in progress] == [1, 2, 3]
+    assert result['saved_count'] == 3
+    # analyze 阶段并发处理，完成顺序不确定，只校验序号集合与固定总数
+    assert sorted(p[0] for p in progress) == [1, 2, 3]
     assert [p[1] for p in progress] == [3, 3, 3]
 
 
-def test_scrape_site_saves_non_html_content_without_extension(monkeypatch, tmp_path):
+def test_scrape_site_marks_non_html_content_as_failed(monkeypatch, tmp_path):
+    """非 HTML 内容类型（无扩展名资源）不保存为 HTML，而是记入 failed（reason=not_html_content）。"""
     pages = {
         'https://example.com/': '<html><body><a href="/img/noext">img</a><a href="/ok.html">ok</a></body></html>',
         'https://example.com/img/noext': 'JFIF_BINARY_BYTES',
@@ -561,20 +575,21 @@ def test_scrape_site_saves_non_html_content_without_extension(monkeypatch, tmp_p
 
     monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'image/jpeg' if 'noext' in url else 'text/html'})
 
-    # Use save_site_html directly to see save-step results (including failures)
-    result = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=1, max_pages=10)
-    # All 3 pages saved (non-HTML content no longer rejected)
-    assert result['saved_count'] == 3
-    assert result['failed_count'] == 0
-    # Verify content_type was persisted to SQLite
+    # /img/noext 路径为 2 段（depth=2），需 max_depth=2 才会被抓取
+    result = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=2, max_pages=10)
+    # 仅 HTML 页面被保存；非 HTML 内容记入 failed
+    assert result['saved_count'] == 2
+    assert result['failed_count'] == 1
     import sqlite3
     from src.scraper import _scrape_db_path
     db = _scrape_db_path('https://example.com', tmp_path)
     conn = sqlite3.connect(str(db))
-    rows = dict(conn.execute("SELECT url, content_type FROM pages"))
+    pages_rows = dict(conn.execute("SELECT url, content_type FROM pages"))
+    failed_rows = dict(conn.execute("SELECT url, reason FROM failed_pages"))
     conn.close()
-    assert rows.get('https://example.com/img/noext') == 'image/jpeg'
-    assert rows.get('https://example.com/ok.html') == 'text/html'
+    assert 'https://example.com/img/noext' not in pages_rows
+    assert pages_rows.get('https://example.com/ok.html') == 'text/html'
+    assert failed_rows.get('https://example.com/img/noext') == 'not_html_content'
 
 
 def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
@@ -721,3 +736,36 @@ def test_save_skips_no_video_pages_with_deleted_html(monkeypatch, tmp_path):
 
     # B 不应被重新下载（video_count=0 代表无需再下载）
     assert 'https://example.com/b' not in fetched
+
+
+def test_save_excludes_too_many_requests_pages(monkeypatch, tmp_path):
+    """title 为 "Too Many Requests" 的页面应被排除：不保存为有效 HTML，记入 failed。"""
+    pages = {
+        'https://example.com/': '<html><body><a href="/ok.html">ok</a><a href="/429.html">429</a></body></html>',
+        'https://example.com/ok.html': '<!doctype html><html><body><p>ok content</p></body></html>',
+        'https://example.com/429.html': '<html><head><title>Too Many Requests</title></head><body>rate limited</body></html>',
+    }
+
+    monkeypatch.setattr(
+        'src.scraper.fetch_html',
+        lambda url, **kwargs: {'html': pages[url], 'content_type': 'text/html'},
+    )
+
+    result = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=1, max_pages=10)
+
+    # 根页面 + ok.html 被保存；429 页面被排除
+    assert result['saved_count'] == 2
+    assert result['failed_count'] == 1
+
+    # 429 页面不应作为有效 HTML 保存到输出目录根
+    saved_names = [p.name for p in tmp_path.glob('*.html')]
+    assert not any('429' in n for n in saved_names)
+
+    # failed 表中记录 reason = challenge_or_block（429 已并入挑战/封锁页检测）
+    import sqlite3
+    from src.scraper import _scrape_db_path
+    db = _scrape_db_path('https://example.com', tmp_path)
+    conn = sqlite3.connect(str(db))
+    rows = dict(conn.execute("SELECT url, reason FROM failed_pages"))
+    conn.close()
+    assert rows.get('https://example.com/429.html') == 'challenge_or_block'

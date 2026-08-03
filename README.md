@@ -69,6 +69,8 @@ python scrape.py scrape https://www.bosch.com/careers -o output --all
 ```bash
 python scrape.py save https://www.unicef.org -o d:\unicef --all --renderer playwright --wait-seconds 90 --cdp-url http://127.0.0.1:9222 --concurrency 1
 ```
+python scrape.py save https://www.unfpa.org -o d:\unfpa --all --renderer playwright --wait-seconds 120 --cdp-url http://127.0.0.1:9222 --concurrency 1
+```
 
 ## 参数说明
 

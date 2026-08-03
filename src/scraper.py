@@ -517,7 +517,7 @@ def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
     if cutoff_markers and any(m in html for m in cutoff_markers):
         cutoff_index = _find_content_cutoff_index(candidates, soup, cutoff_markers)
         if cutoff_index is not None:
-            candidates = candidates[:cutoff_index -1 if cutoff_index > 0 else 0]
+            candidates = candidates[:cutoff_index]
 
     blocks = []
     seen_urls = set()
@@ -1072,7 +1072,7 @@ def save_site_html(
                 cached_html = cached_html_path.read_text(encoding='utf-8')
                 # 遇到links!=[]的并且是block/challenge页面的情况，并不会执行到这里，需要单独写个程序洗出 block/challenge页面的缓存
                 if _is_challenge_or_block_page(cached_html):
-                    _log(f'Cached HTML is a challenge/block page: {cached_url}')
+                    _log(f'Cached HTML is a challenge/block/rate-limit page: {cached_url}')
                     cached_html_path.unlink(missing_ok=True)
                     visited.remove(cached_url)
                     continue
