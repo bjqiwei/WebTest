@@ -188,6 +188,45 @@ def test_extract_content_blocks_allows_images_inside_form():
     assert media_items[0]['original_url'] == 'https://example.com/inside-form.webp'
 
 
+def test_extract_content_blocks_skips_base64_image():
+    """base64（data URI）形式的图片应被忽略，普通图片仍正常提取。"""
+    html = '''
+    <html>
+      <body>
+        <main>
+          <h1>Title</h1>
+          <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" alt="inline base64" />
+          <img src="data:image/svg+xml;base64,PHN2Zy8+" alt="inline svg" />
+          <img src="/hero.webp" alt="Hero" />
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com')
+    media_items = [b for b in blocks if isinstance(b, dict)]
+    assert len(media_items) == 1, 'base64 图片应被忽略，仅保留普通图片'
+    assert media_items[0]['type'] == 'image'
+    assert media_items[0]['original_url'] == 'https://example.com/hero.webp'
+
+
+def test_extract_content_blocks_skips_base64_image_from_data_src():
+    """img 的 data-src 为 base64 时应同样忽略。"""
+    html = '''
+    <html>
+      <body>
+        <main>
+          <img data-src="data:image/webp;base64,UklGRi4A" alt="lazy base64" />
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com')
+    media_items = [b for b in blocks if isinstance(b, dict)]
+    assert media_items == [], 'data-src 为 base64 的图片不应被提取'
+
+
 def test_extract_content_blocks_truncates_after_cutoff_marker():
     """命中截断标记后，其后的内容块全部忽略，标记本身的内容（视频）保留。
 
