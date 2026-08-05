@@ -47,6 +47,10 @@ IMAGE_FILE_RE = re.compile(r'\.(png|jpe?g|webp|gif|bmp|svg)(\?|$)', re.I)
 # base64/data URI（如 data:image/png;base64,...）形式的图片无法作为外链媒体提取，忽略
 DATA_URI_RE = re.compile(r'^data:', re.I)
 HTML_CONTENT_TYPE_RE = re.compile(r'^\s*(?:text/html|application/xhtml\+xml)\s*(?:;|$)', re.I)
+
+# 404/错误页检测：页面 <link> 元素（如 canonical/alternate）的 href 中包含这些
+# 标记（例如 /page-404、/error-404）时，该页面视为无效内容，不提取其视频、图片。
+LINK_404_MARKERS = ('page-404', 'error-404')
 DEFAULT_USER_AGENT = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
     'AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -368,6 +372,18 @@ def _nearby_description(tag: Tag) -> str:
     return ''
 
 
+def _has_404_link(soup: BeautifulSoup) -> bool:
+    """检测页面 <link> 元素（如 canonical/alternate）的 href 是否含 404 标记。
+
+    返回 True 表示这是 404/错误页，不应提取其中的视频、图片等内容。
+    """
+    for link in soup.find_all('link', href=True):
+        href = (link.get('href') or '').lower()
+        if any(m in href for m in LINK_404_MARKERS):
+            return True
+    return False
+
+
 def _media_from_tag(tag: Tag, base_url: str):
     src = ''
     media_type = ''
@@ -495,6 +511,12 @@ def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
         cutoff_markers = CONTENT_CUTOFF_MARKERS
 
     soup = BeautifulSoup(html, 'html.parser')
+
+    # 404/错误页：页面 <link> 元素 href 含 page-404/error-404 时，不提取该页面的
+    # 视频、图片等内容（整个页面视为无效）。
+    if _has_404_link(soup):
+        return []
+
     root = soup.find('main') or soup.body or soup
 
     tags = ['h1', 'h2', 'h3', 'h4', 'p', 'li', 'video', 'iframe', 'a', 'img']
