@@ -42,6 +42,8 @@ CONTENT_CUTOFF_MARKERS = (
 VIDEO_FILE_RE = re.compile(r'\.(mp4|m3u8|webm|ogg)(\?|$)', re.I)
 EMBED_RE = re.compile(r'youtube|youtu\.be|vimeo|player|wistia', re.I)
 IMAGE_FILE_RE = re.compile(r'\.(png|jpe?g|webp|gif|bmp|svg)(\?|$)', re.I)
+# base64/data URI（如 data:image/png;base64,...）形式的图片无法作为外链媒体提取，忽略
+DATA_URI_RE = re.compile(r'^data:', re.I)
 HTML_CONTENT_TYPE_RE = re.compile(r'^\s*(?:text/html|application/xhtml\+xml)\s*(?:;|$)', re.I)
 DEFAULT_USER_AGENT = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -359,6 +361,9 @@ def _media_from_tag(tag: Tag, base_url: str):
 
     src = _resolve_url(base_url, src)
     if not src or not media_type:
+        return None
+    # base64/data URI 图片（如 data:image/png;base64,...）无法作为外链媒体，忽略
+    if media_type == 'image' and DATA_URI_RE.match(src):
         return None
 
     note = _nearby_description(tag)
