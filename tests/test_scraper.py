@@ -312,6 +312,69 @@ def test_extract_content_blocks_skips_button_content():
     assert not any('Doná ahora' in t for t in texts), '按钮文本不应被提取'
 
 
+def test_extract_content_blocks_skips_404_link_page():
+    """页面 <link> 元素 href 含 page-404 时，不提取该页面的视频、图片等内容。"""
+    html = '''
+    <html>
+      <head>
+        <link rel="canonical" href="https://example.com/fr/page-404">
+      </head>
+      <body>
+        <main>
+          <h1>Page not found</h1>
+          <img src="/hero.webp" alt="Hero" />
+          <video src="/intro.mp4"></video>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com/fr')
+    assert blocks == [], '404 页面不应提取任何内容'
+
+
+def test_extract_content_blocks_skips_error_404_link_page():
+    """error-404 标记同样生效（如西语错误页）。"""
+    html = '''
+    <html>
+      <head>
+        <link rel="canonical" href="https://example.com/es/error-404">
+      </head>
+      <body>
+        <main>
+          <video src="/intro.mp4"></video>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com/es')
+    assert blocks == []
+
+
+def test_extract_content_blocks_keeps_normal_link_pages():
+    """正常页面即使有 <link> 元素（不含 404 标记），视频和图片仍正常提取。"""
+    html = '''
+    <html>
+      <head>
+        <link rel="canonical" href="https://example.com/careers">
+      </head>
+      <body>
+        <main>
+          <h1>Careers</h1>
+          <img src="/hero.webp" alt="Hero" />
+          <video src="/intro.mp4"></video>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com')
+    assert 'Careers' in blocks
+    media_items = [b for b in blocks if isinstance(b, dict)]
+    assert len(media_items) == 2
+
+
 def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
     pages = {
         'https://example.com/': '''
