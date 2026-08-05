@@ -5,7 +5,6 @@ import src.scraper as scraper_module
 
 from src.scraper import (
   extract_content_blocks,
-  extract_videos,
   fetch_html,
   is_file_url,
   scrape_site,
@@ -96,39 +95,6 @@ class TestIsFileUrl:
         """/media/ 后跟的不是 file 端点不应被误判。"""
         assert is_file_url('https://example.com/media/7606') is False
         assert is_file_url('https://example.com/media/news') is False
-
-
-class TestExtractVideos:
-    """原 extract_videos 测试。"""
-
-    def test_extract_videos_from_html(self):
-        html = '''
-        <html>
-          <body>
-            <header><a href="/menu.mp4">menu</a></header>
-            <main>
-              <p>Intro paragraph for the first video.</p>
-              <video src="/media/v1.mp4"></video>
-              <figure>
-                <video><source src="https://cdn.example.com/v2.webm"></source></video>
-                <figcaption>Vid 2</figcaption>
-              </figure>
-              <iframe src="https://www.youtube.com/embed/abc123"></iframe>
-              <a href="https://cdn.example.com/movie.mp4">download</a>
-              <a href="https://cdn.example.com/movie.mp4">download duplicate</a>
-            </main>
-          </body>
-        </html>
-        '''
-
-        videos = extract_videos(html, 'https://example.com')
-        assert len(videos) == 4
-        assert videos[0]['original_url'].endswith('/media/v1.mp4')
-        assert videos[1]['original_url'] == 'https://cdn.example.com/v2.webm'
-        assert videos[1]['note'] == 'Vid 2'
-        assert videos[2]['original_url'] == 'https://www.youtube.com/embed/abc123'
-        assert videos[3]['original_url'] == 'https://cdn.example.com/movie.mp4'
-        assert [v['index'] for v in videos] == [1, 2, 3, 4]
 
 
 def test_safe_name_root_url_has_single_index():
