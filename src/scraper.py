@@ -329,62 +329,6 @@ def _nearby_description(tag: Tag) -> str:
     return ''
 
 
-def _extract_video_items(soup: BeautifulSoup, base_url: str):
-    items = []
-
-    for tag in soup.find_all(['video', 'iframe', 'a']):
-        if not isinstance(tag, Tag) or _is_in_noise_area(tag):
-            continue
-
-        src = ''
-        if tag.name == 'video':
-            src = tag.get('src', '')
-            if not src:
-                source = tag.find('source')
-                if source:
-                    src = source.get('src', '')
-        elif tag.name == 'iframe':
-            iframe_src = tag.get('src', '')
-            if iframe_src and (EMBED_RE.search(iframe_src) or VIDEO_FILE_RE.search(iframe_src)):
-                src = iframe_src
-        elif tag.name == 'a':
-            href = tag.get('href', '')
-            if href and VIDEO_FILE_RE.search(href):
-                src = href
-
-        src = _resolve_url(base_url, src)
-        if not src:
-            continue
-
-        description = _nearby_description(tag)
-        items.append(
-            {
-                'id': '',
-                'type': 'video',
-                'index': 0,
-                'tos_url': src,
-                'original_url': src,
-                'note': description,
-                'alt': '',
-            }
-        )
-
-    # De-duplicate while preserving DOM order.
-    seen = set()
-    ordered = []
-    for item in items:
-        key = item['original_url']
-        if key in seen:
-            continue
-        seen.add(key)
-        ordered.append(item)
-
-    for idx, item in enumerate(ordered, start=1):
-        item['index'] = idx
-
-    return ordered
-
-
 def _media_from_tag(tag: Tag, base_url: str):
     src = ''
     media_type = ''
@@ -602,11 +546,6 @@ def _extract_links(html: str, base_url: str, root_host: str):
             continue
         links.append(resolved)
     return links
-
-
-def extract_videos(html: str, base_url: str):
-    soup = BeautifulSoup(html, 'html.parser')
-    return _extract_video_items(soup, base_url)
 
 
 def _is_html_document(html: str) -> bool:
