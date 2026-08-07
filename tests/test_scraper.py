@@ -502,6 +502,17 @@ def test_challenge_detector_triggered_by_cloudflare_challenge_markers():
     assert scraper_module._is_challenge_or_block_page(html) is True
 
 
+def test_challenge_detector_triggered_by_503_page():
+    # Regression: the '503 Service Temporarily Unavailable' marker must match
+    # case-insensitively against the lowercased sample (was broken with
+    # mixed-case marker, e.g. nginx 503 pages were not flagged).
+    html = '''<html><head><title>503 Service Temporarily Unavailable</title></head>
+    <body><center><h1>503 Service Temporarily Unavailable</h1></center>
+    <hr><center>nginx/1.28.2</center></body></html>
+    '''
+    assert scraper_module._is_challenge_or_block_page(html) is True
+
+
 def test_fetch_html_playwright_mode(monkeypatch):
     monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: {'html': '<html>pw</html>', 'content_type': 'text/html'})
     result = fetch_html('https://example.com', renderer='playwright')
