@@ -365,6 +365,9 @@ def _media_from_tag(tag: Tag, base_url: str):
     # base64/data URI 图片（如 data:image/png;base64,...）无法作为外链媒体，忽略
     if media_type == 'image' and DATA_URI_RE.match(src):
         return None
+    # SVG 图片（矢量图标/图形，通常为装饰性噪声）不作为媒体提取，忽略
+    if media_type == 'image' and Path(urlparse(src).path).suffix.lower() == '.svg':
+        return None
 
     note = _nearby_description(tag)
     alt = _clean_text(tag.get('alt', '')) if tag.name == 'img' else ''
