@@ -33,7 +33,10 @@ NOISE_PARENT_TAGS = {
     'noscript',
 }
 
-NOISE_KEYWORDS = ('footer', 'cookie', 'consent', 'breadcrumb', 'share', 'language', 'lang-switcher')
+NOISE_KEYWORDS = ('footer', 'cookie', 'consent', 'breadcrumb', 'share', 'language', 'lang-switcher','select')
+
+# 精确 class 匹配的噪音容器（不采用子串匹配，避免 sidebar 误匹配 sidebar-wrapper）
+NOISE_EXACT_CLASSES = {'quicknav-wrapper', 'sidebar', 'swm-map-search-alpha', 'swm-map-search-items','swm-map-heading-scale','content-type','tabcnt-showhide','date'}
 
 CONTENT_CUTOFF_MARKERS = (
     # 页面中出现该标记后，其后的内容块全部忽略（例如视频版权/署名行等）
@@ -263,6 +266,34 @@ def _is_in_noise_area(tag: Tag) -> bool:
         if any(k in classes for k in NOISE_KEYWORDS):
             return True
         if any(k in pid for k in NOISE_KEYWORDS):
+            return True
+    return False
+
+
+def _is_visually_hidden(tag: Tag) -> bool:
+    """判断元素是否为视觉隐藏元素（如 skip-link、screen-reader-only 内容）。
+
+    这些元素对屏幕阅读器可见但对视觉用户不可见，不应提取为正文内容。
+    """
+    classes = ' '.join(tag.get('class', [])).lower()
+    if 'skip-link' in classes:
+        return True
+    if 'visually-hidden' in classes:
+        return True
+    if 'sr-only' in classes:
+        return True
+    return False
+
+
+def _is_in_exact_noise_class(tag: Tag) -> bool:
+    """检查元素或其祖先是否有精确匹配 NOISE_EXACT_CLASSES 的 class 名。"""
+    if set(tag.get('class', [])) & NOISE_EXACT_CLASSES:
+        return True
+
+    for parent in tag.parents:
+        if not isinstance(parent, Tag):
+            continue
+        if set(parent.get('class', [])) & NOISE_EXACT_CLASSES:
             return True
     return False
 
@@ -499,6 +530,14 @@ def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
         if not isinstance(tag, Tag) or _is_in_noise_area(tag):
             continue
 
+        # 跳过精确 class 匹配的噪音容器内的元素（如 quicknav-wrapper、sidebar）
+        if _is_in_exact_noise_class(tag):
+            continue
+
+        # 跳过视觉隐藏元素（如 skip-link、screen-reader-only 内容）
+        if _is_visually_hidden(tag):
+            continue
+
         media = _media_from_tag(tag, base_url)
         if media:
             key = media['original_url']
@@ -515,6 +554,10 @@ def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
                 media['index'] = image_index
                 media['id'] = hashlib.md5(f"{base_url}|{key}|i{image_index}".encode('utf-8')).hexdigest()
                 blocks.append(media)
+            continue
+
+        # 跳过 <a> 标签中的文本内容（媒体链接已在上面处理）
+        if tag.name == 'a':
             continue
 
         # 按钮内容不提取（如 "Doná ahora" 捐赠按钮）
