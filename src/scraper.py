@@ -213,19 +213,10 @@ def is_file_url(url):
 def _safe_name_from_url(url: str, max_len: int = 120) -> str:
     p = urlparse(url)
     host = p.netloc.replace(':', '_')
-    path = _sanitize_filename_component(unquote(p.path.strip('/').replace('/', '_')) or '')
-    raw_query = unquote(re.sub(r'[^a-zA-Z0-9]+', '_', p.query).strip('_'))
-    query = _sanitize_filename_component(raw_query) if raw_query else ''
-    if path and query:
-        name = f"{host}_{path}_{query}"
-    elif path:
-        name = f"{host}_{path}"
-    elif query:
-        name = f"{host}_{query}"
-    else:
-        name = host
-    if len(name) > max_len:
-        name = name[:max_len].rstrip('_')
+    # 去掉常见的 www. 前缀（如 www.panthera.org -> panthera.org），使数据库名更简洁
+    if host.lower().startswith('www.'):
+        host = host[4:]
+    name = host
     return name
 
 
@@ -271,9 +262,9 @@ def _normalize_url(url: str) -> str:
     if parsed.scheme not in ('http', 'https'):
         return ''
     path = parsed.path or '/'
-    # 去除路径末尾的斜杠，使 /cat/small-cats 与 /cat/small-cats/ 视为同一 URL
-    if path != '/':
-        path = path.rstrip('/')
+    # 统一去掉路径末尾的斜杠（含根路径），使 /cat/small-cats 与 /cat/small-cats/、
+    # 以及 panthera.org 与 panthera.org/ 都视为同一 URL（根路径规范为无斜杠形式）
+    path = path.rstrip('/')
     return parsed._replace(path=path, query='', fragment='').geturl()
 
 
@@ -905,7 +896,7 @@ def _failed_dir(outdir: Path) -> Path:
 
 def _scrape_db_path(start_url: str, outdir: Path) -> Path:
     """合并后的 SQLite 数据库路径（含 pages 和 failed_pages 两张表）。"""
-    return outdir / f"{_safe_name_from_url(start_url)}_scrape.db"
+    return outdir / f"{_safe_name_from_url(start_url)}.db"
 
 
 def _init_db(db_path: Path) -> sqlite3.Connection:

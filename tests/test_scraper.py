@@ -98,7 +98,16 @@ class TestIsFileUrl:
 
 
 def test_safe_name_root_url_has_single_index():
-    assert scraper_module._safe_name_from_url('https://www.unicef.org/') == 'www.unicef.org'
+    assert scraper_module._safe_name_from_url('https://www.unicef.org/') == 'unicef.org'
+
+
+def test_safe_name_strips_www_prefix():
+    """数据库名（_safe_name_from_url）只保留 host，并去掉 host 的 www. 前缀。"""
+    assert scraper_module._safe_name_from_url('https://www.panthera.org/cat') == 'panthera.org'
+    assert scraper_module._safe_name_from_url('https://panthera.org/cat') == 'panthera.org'
+    assert scraper_module._safe_name_from_url('https://panthera.org/') == 'panthera.org'
+    # 只去掉 www. 前缀，不改变剩余 host 的大小写
+    assert scraper_module._safe_name_from_url('https://WWW.Example.com') == 'Example.com'
 
 
 class TestNormalizeUrl:
@@ -112,9 +121,12 @@ class TestNormalizeUrl:
         assert scraper_module._normalize_url('https://panthera.org/cat/small-cats/') == \
                'https://panthera.org/cat/small-cats'
 
-    def test_root_kept_as_slash(self):
-        assert scraper_module._normalize_url('https://panthera.org') == 'https://panthera.org/'
-        assert scraper_module._normalize_url('https://panthera.org/') == 'https://panthera.org/'
+    def test_root_slash_removed(self):
+        # 根路径统一规范为无斜杠形式
+        assert scraper_module._normalize_url('https://panthera.org') == 'https://panthera.org'
+        assert scraper_module._normalize_url('https://panthera.org/') == 'https://panthera.org'
+        assert scraper_module._normalize_url('https://panthera.org/') == \
+               scraper_module._normalize_url('https://panthera.org')
 
     def test_query_and_fragment_stripped(self):
         assert scraper_module._normalize_url('https://panthera.org/cat/small-cats/?utm=1#top') == \
