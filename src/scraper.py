@@ -858,12 +858,14 @@ def _save_html_snapshot(url: str, html: str, outdir: Path, page_index: int, time
     return filename
 
 
-def _save_page_output(url: str, html: str, outdir: Path, page_index: int, timestamp: str, content_blocks):
+def _save_analyze_output(url: str, src_path: Path, outdir: Path, page_index: int, timestamp: str, content_blocks):
+    """将原始 HTML 文件复制到分析目录，并生成 JSON 分析结果。"""
     base_name = _build_output_base_name(url, page_index, timestamp)
-    html_path = outdir / f"{base_name}.html"
+    dst_html = outdir / f"{base_name}.html"
     json_path = outdir / f"{base_name}.json"
-    with open(html_path, 'w', encoding='utf-8') as f:
-        f.write(html)
+
+    # 从原始路径读取 HTML 写入目标
+    dst_html.write_text(src_path.read_text(encoding='utf-8'), encoding='utf-8')
 
     payload = {
         'original_link': url,
@@ -873,7 +875,7 @@ def _save_page_output(url: str, html: str, outdir: Path, page_index: int, timest
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
-    return str(html_path), str(json_path)
+    return str(dst_html), str(json_path)
 
 
 def _failed_dir(outdir: Path) -> Path:
@@ -1438,26 +1440,16 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
             video_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'video')
             image_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'image')
 
-            # 只有在有视频时才保留完整数据用于后续保存；否则立即释放 html
-            if video_count > 0:
-                return {
-                    'url': current_url,
-                    'html': html,
-                    'content_blocks': blocks,
-                    'video_count': video_count,
-                    'image_count': image_count,
-                    'content_type': content_type,
-                    'html_path': src_html_path,
-                    'error': None,
-                }
-            else:
-                return {
-                    'url': current_url,
-                    'video_count': video_count,
-                    'image_count': image_count,
-                    'html_path': src_html_path,
-                    'error': None,
-                }
+            return {
+                'url': current_url,
+                'content_blocks': blocks,
+                'video_count': video_count,
+                'image_count': image_count,
+                'content_type': content_type,
+                'html_path': src_html_path,
+                'error': None,
+            }
+
         except Exception as e:
             return {'url': current_url, 'error': str(e), 'video_count': 0, 'image_count': 0}
 
@@ -1519,8 +1511,8 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
                 if video_count > 0:
                     try:
                         timestamp = result['html_path'].stem.rsplit('_html_', 1)[-1]
-                        _save_page_output(
-                            current_url, result['html'], analyze_dir, len(result_pages) + 1, timestamp,
+                        _save_analyze_output(
+                            current_url, result['html_path'], analyze_dir, len(result_pages) + 1, timestamp,
                             content_blocks=result['content_blocks'],
                         )
                     except Exception:
