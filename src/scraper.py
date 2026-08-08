@@ -42,6 +42,7 @@ CHALLENGE_MARKERS = (
     '安全服务防护恶意自动程序',
     'too many requests',
     '503 service temporarily unavailable',
+    '500 error page',
 )
 
 CONTENT_CUTOFF_MARKERS = (
