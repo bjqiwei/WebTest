@@ -26,7 +26,7 @@ except Exception:
 
 
 # 404/错误页检测关键字
-PAGE_404_MARKERS = ('Erreur 404 | Fonds des Nations Unies pour la population', '404 Error Page')
+PAGE_404_MARKERS = ('Erreur 404 | Fonds des Nations Unies pour la population', '404 Error Page', 'Error 404 | Panthera')
 
 # 挑战页/封锁页检测关键字
 CHALLENGE_MARKERS = (
