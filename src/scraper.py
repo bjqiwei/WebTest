@@ -224,7 +224,7 @@ def _sanitize_filename_component(value: str) -> str:
 
 def _build_output_base_name(url: str, page_index: int, timestamp: str) -> str:
     page_name = _path_name_from_url(url)
-    return f"{page_index:04d}_{page_name}_html_{timestamp}"
+    return f"{page_index:04d}_{page_name}_{timestamp}"
 
 
 def _resolve_url(base: str, link: str) -> str:
@@ -820,12 +820,13 @@ def fetch_html(
 
 def _save_html_snapshot(url: str, html: str, outdir: Path, page_index: int, timestamp: str) -> str:
     base_name = _build_output_base_name(url, page_index, timestamp)
-    html_path = outdir / f"{base_name}.html"
+    filename = f"{base_name}.html"
+    html_path = outdir / filename
 
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html)
 
-    return str(html_path)
+    return filename
 
 
 def _save_page_output(url: str, html: str, outdir: Path, page_index: int, timestamp: str, content_blocks):
@@ -908,8 +909,14 @@ def _load_html_cache_from_db(start_url: str, outdir: Path) -> list:
         conn = sqlite3.connect(str(db_path))
         conn.execute("PRAGMA journal_mode=WAL")
         cursor = conn.execute("SELECT url, html_path, content_type, video_count FROM pages")
-        cache = [{'url': url, 'html_path': html_path, 'content_type': content_type, 'video_count': video_count}
-                 for url, html_path, content_type, video_count in cursor]
+        cache = []
+        for url, html_path, content_type, video_count in cursor:
+            if html_path:
+                p = Path(html_path)
+                if not p.is_absolute():
+                    p = outdir / p
+                html_path = str(p)
+            cache.append({'url': url, 'html_path': html_path, 'content_type': content_type, 'video_count': video_count})
         conn.close()
         return cache
     except Exception:
@@ -992,10 +999,14 @@ def _load_failed_pages_from_db(start_url: str, outdir: Path) -> list:
         cursor = conn.execute(
             "SELECT url, reason, html_path FROM failed_pages ORDER BY rowid"
         )
-        result = [
-            {'url': url, 'reason': reason, 'html_path': html_path}
-            for url, reason, html_path in cursor
-        ]
+        result = []
+        for url, reason, html_path in cursor:
+            if html_path:
+                p = Path(html_path)
+                if not p.is_absolute():
+                    p = outdir / p
+                html_path = str(p)
+            result.append({'url': url, 'reason': reason, 'html_path': html_path})
         conn.close()
         return result
     except Exception:
@@ -1316,8 +1327,14 @@ def _load_unanalyzed_pages_from_db(start_url: str, outdir: Path) -> list:
         cursor = conn.execute(
             "SELECT url, html_path, content_type FROM pages WHERE video_count = -1 OR video_count > 0"
         )
-        pages = [{'url': url, 'html_path': html_path, 'content_type': content_type}
-                 for url, html_path, content_type in cursor]
+        pages = []
+        for url, html_path, content_type in cursor:
+            if html_path:
+                p = Path(html_path)
+                if not p.is_absolute():
+                    p = outdir / p
+                html_path = str(p)
+            pages.append({'url': url, 'html_path': html_path, 'content_type': content_type})
         conn.close()
         return pages
     except Exception:
