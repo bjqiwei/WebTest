@@ -261,16 +261,26 @@ def _normalize_url(url: str) -> str:
     parsed = urlparse(url)
     if parsed.scheme not in ('http', 'https'):
         return ''
+    netloc = parsed.netloc
+    # 规范化 host：仅当 host 为 2 段的“顶级域名”（如 panthera.org）且没有 www 时补上 www，
+    # 使 panthera.org 与 www.panthera.org 视为同一 URL；store.xxx 等子域名不受影响。
+    host = netloc.split('@', 1)[-1].split(':', 1)[0]  # 去掉 userinfo 与端口
+    if host.count('.') == 1 and not host.lower().startswith('www.'):
+        netloc = 'www.' + netloc
     path = parsed.path or '/'
     # 统一去掉路径末尾的斜杠（含根路径），使 /cat/small-cats 与 /cat/small-cats/、
     # 以及 panthera.org 与 panthera.org/ 都视为同一 URL（根路径规范为无斜杠形式）
     path = path.rstrip('/')
-    return parsed._replace(path=path, query='', fragment='').geturl()
+    return parsed._replace(netloc=netloc, path=path, query='', fragment='').geturl()
 
 
 def _is_same_domain(url: str, root_host: str) -> bool:
     host = urlparse(url).netloc.lower()
     root = root_host.lower()
+    # 把 root 的 www. 前缀去掉再比较，使 www.panthera.org、panthera.org、store.panthera.org
+    # 都归到 apex（panthera.org）下，视为同一域名。
+    if root.startswith('www.'):
+        root = root[4:]
     return host == root or host.endswith(f'.{root}')
 
 

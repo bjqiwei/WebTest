@@ -101,6 +101,19 @@ def test_safe_name_root_url_has_single_index():
     assert scraper_module._safe_name_from_url('https://www.unicef.org/') == 'unicef.org'
 
 
+def test_is_same_domain_ignores_www_prefix():
+    """_is_same_domain 应忽略 root_host 的 www. 前缀，子域名视为同域。"""
+    # root 带 www 时，裸域名与子域名都算同域
+    assert scraper_module._is_same_domain('https://www.panthera.org/x', 'www.panthera.org') is True
+    assert scraper_module._is_same_domain('https://panthera.org/x', 'www.panthera.org') is True
+    assert scraper_module._is_same_domain('https://store.panthera.org/x', 'www.panthera.org') is True
+    # root 不带 www 时行为不变
+    assert scraper_module._is_same_domain('https://store.panthera.org/x', 'panthera.org') is True
+    assert scraper_module._is_same_domain('https://www.panthera.org/x', 'panthera.org') is True
+    # 外部域名仍被排除
+    assert scraper_module._is_same_domain('https://other.org/x', 'www.panthera.org') is False
+
+
 def test_safe_name_strips_www_prefix():
     """数据库名（_safe_name_from_url）只保留 host，并去掉 host 的 www. 前缀。"""
     assert scraper_module._safe_name_from_url('https://www.panthera.org/cat') == 'panthera.org'
@@ -111,26 +124,38 @@ def test_safe_name_strips_www_prefix():
 
 
 class TestNormalizeUrl:
-    """单元测试 URL 归一化：去 fragment/query、去尾部斜杠。"""
+    """单元测试 URL 归一化：去 fragment/query、去尾部斜杠、补 www。"""
 
     def test_trailing_slash_collapses(self):
-        assert scraper_module._normalize_url('https://panthera.org/cat/small-cats') == \
-               scraper_module._normalize_url('https://panthera.org/cat/small-cats/')
+        assert scraper_module._normalize_url('https://www.panthera.org/cat/small-cats') == \
+               scraper_module._normalize_url('https://www.panthera.org/cat/small-cats/')
 
     def test_trailing_slash_removed(self):
         assert scraper_module._normalize_url('https://panthera.org/cat/small-cats/') == \
-               'https://panthera.org/cat/small-cats'
+               'https://www.panthera.org/cat/small-cats'
 
     def test_root_slash_removed(self):
         # 根路径统一规范为无斜杠形式
-        assert scraper_module._normalize_url('https://panthera.org') == 'https://panthera.org'
-        assert scraper_module._normalize_url('https://panthera.org/') == 'https://panthera.org'
+        assert scraper_module._normalize_url('https://panthera.org') == 'https://www.panthera.org'
+        assert scraper_module._normalize_url('https://panthera.org/') == 'https://www.panthera.org'
         assert scraper_module._normalize_url('https://panthera.org/') == \
                scraper_module._normalize_url('https://panthera.org')
 
     def test_query_and_fragment_stripped(self):
         assert scraper_module._normalize_url('https://panthera.org/cat/small-cats/?utm=1#top') == \
-               'https://panthera.org/cat/small-cats'
+               'https://www.panthera.org/cat/small-cats'
+
+    def test_apex_adds_www(self):
+        assert scraper_module._normalize_url('https://panthera.org') == 'https://www.panthera.org'
+        assert scraper_module._normalize_url('https://panthera.org/cat') == 'https://www.panthera.org/cat'
+
+    def test_existing_www_untouched(self):
+        assert scraper_module._normalize_url('https://www.panthera.org/cat') == 'https://www.panthera.org/cat'
+
+    def test_subdomain_untouched(self):
+        # 子域名（store.xxx、go.xxx）不应被补 www
+        assert scraper_module._normalize_url('https://store.panthera.org/cat') == 'https://store.panthera.org/cat'
+        assert scraper_module._normalize_url('https://go.panthera.org') == 'https://go.panthera.org'
 
 
 def test_extract_links_normalizes_trailing_slash():
@@ -143,7 +168,7 @@ def test_extract_links_normalizes_trailing_slash():
     '''
     links = scraper_module._extract_links(html, 'https://panthera.org/', 'panthera.org')
     # 三个不同写法应被归一化为同一个 URL（去重由爬取循环的 queued/visited 集合完成）
-    assert links == ['https://panthera.org/cat/small-cats'] * 3
+    assert links == ['https://www.panthera.org/cat/small-cats'] * 3
 
 
 def test_extract_content_blocks_with_image_and_video():
@@ -454,7 +479,7 @@ def test_extract_content_blocks_keeps_normal_link_pages():
 
 def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
     pages = {
-        'https://example.com/': '''
+        'https://www.example.com': '''
         <html><body><main>
           <a href="/careers.html">careers</a>
           <a href="/about.css">about-style</a>
@@ -463,7 +488,7 @@ def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
           <video src="/v0.mp4"></video>
         </main></body></html>
       ''',
-        'https://example.com/careers.html': '''
+        'https://www.example.com/careers.html': '''
         <html><body><main>
           <iframe src="https://www.youtube.com/embed/abc"></iframe>
         </main></body></html>
@@ -487,7 +512,7 @@ def test_scrape_site_recursive_same_domain(tmp_path, monkeypatch):
 
 def test_scrape_site_follows_header_nav_links(tmp_path, monkeypatch):
     pages = {
-        'https://example.com/': '''
+        'https://www.example.com': '''
         <html><body>
           <header>
             <nav><a href="/about">About</a></nav>
@@ -495,7 +520,7 @@ def test_scrape_site_follows_header_nav_links(tmp_path, monkeypatch):
           <main><p>Home</p></main>
         </body></html>
         ''',
-        'https://example.com/about': '<html><body><main><p>About us</p></main></body></html>',
+        'https://www.example.com/about': '<html><body><main><p>About us</p></main></body></html>',
     }
 
     monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'text/html'})
@@ -507,9 +532,9 @@ def test_scrape_site_follows_header_nav_links(tmp_path, monkeypatch):
 
 def test_scrape_site_unlimited_depth_and_pages(tmp_path, monkeypatch):
     pages = {
-    'https://example.com/': '<html><body><a href="/a.html">a</a></body></html>',
-    'https://example.com/a.html': '<html><body><a href="/b.html">b</a></body></html>',
-    'https://example.com/b.html': '<html><body><p>end</p></body></html>',
+    'https://www.example.com': '<html><body><a href="/a.html">a</a></body></html>',
+    'https://www.example.com/a.html': '<html><body><a href="/b.html">b</a></body></html>',
+    'https://www.example.com/b.html': '<html><body><p>end</p></body></html>',
     }
 
     monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'text/html'})
@@ -520,9 +545,9 @@ def test_scrape_site_unlimited_depth_and_pages(tmp_path, monkeypatch):
 
 def test_scrape_site_skip_parse_error_and_continue(tmp_path, monkeypatch):
     pages = {
-  'https://example.com/': '<html><body><a href="/bad.html">bad</a><a href="/good.html">good</a></body></html>',
-  'https://example.com/bad.html': '<html><body><main>bad page<video src="/bad.mp4"></video></main></body></html>',
-  'https://example.com/good.html': '<html><body><main><p>ok</p><video src="/ok.mp4"></video></main></body></html>',
+  'https://www.example.com': '<html><body><a href="/bad.html">bad</a><a href="/good.html">good</a></body></html>',
+  'https://www.example.com/bad.html': '<html><body><main>bad page<video src="/bad.mp4"></video></main></body></html>',
+  'https://www.example.com/good.html': '<html><body><main><p>ok</p><video src="/ok.mp4"></video></main></body></html>',
     }
 
     monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'text/html'})
@@ -539,13 +564,13 @@ def test_scrape_site_skip_parse_error_and_continue(tmp_path, monkeypatch):
     result = scrape_site('https://example.com', tmp_path, max_depth=1, max_pages=10)
     assert result['page_count'] == 2  # /（无视频）和 good.html（有视频且成功）
     assert result['failed_count'] == 1  # bad.html 有视频但解析失败
-    assert 'https://example.com/bad.html' in result['failed']
+    assert 'https://www.example.com/bad.html' in result['failed']
 
 
 def test_scrape_site_persists_failed_fetch_pages(tmp_path, monkeypatch):
     pages = {
-      'https://example.com/': '<html><body><a href="/bad.html">bad</a><a href="/good.html">good</a></body></html>',
-      'https://example.com/good.html': '<html><body><main><p>ok</p></main></body></html>',
+      'https://www.example.com': '<html><body><a href="/bad.html">bad</a><a href="/good.html">good</a></body></html>',
+      'https://www.example.com/good.html': '<html><body><main><p>ok</p></main></body></html>',
     }
 
     def fake_fetch(url, **kwargs):
@@ -569,7 +594,7 @@ def test_scrape_site_persists_failed_fetch_pages(tmp_path, monkeypatch):
     conn.close()
     assert len(rows) == 1
     failed_url, failed_reason = rows[0]
-    assert failed_url == 'https://example.com/bad.html'
+    assert failed_url == 'https://www.example.com/bad.html'
     assert 'network down' in failed_reason
 
 
@@ -651,9 +676,9 @@ def test_fetch_html_blocked_after_playwright(monkeypatch):
 
 def test_scrape_site_progress_uses_fixed_total(monkeypatch, tmp_path):
     pages = {
-        'https://example.com/': '<html><body><a href="/a.html">a</a></body></html>',
-        'https://example.com/a.html': '<html><body><a href="/b.html">b</a></body></html>',
-        'https://example.com/b.html': '<html><body><p>end</p></body></html>',
+        'https://www.example.com': '<html><body><a href="/a.html">a</a></body></html>',
+        'https://www.example.com/a.html': '<html><body><a href="/b.html">b</a></body></html>',
+        'https://www.example.com/b.html': '<html><body><p>end</p></body></html>',
     }
 
     monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'text/html'})
@@ -678,9 +703,9 @@ def test_scrape_site_progress_uses_fixed_total(monkeypatch, tmp_path):
 
 def test_scrape_site_saves_non_html_content_without_extension(monkeypatch, tmp_path):
     pages = {
-        'https://example.com/': '<html><body><a href="/img/noext">img</a><a href="/ok.html">ok</a></body></html>',
-        'https://example.com/img/noext': 'JFIF_BINARY_BYTES',
-        'https://example.com/ok.html': '<!doctype html><html><body><p>ok</p></body></html>',
+        'https://www.example.com': '<html><body><a href="/img/noext">img</a><a href="/ok.html">ok</a></body></html>',
+        'https://www.example.com/img/noext': 'JFIF_BINARY_BYTES',
+        'https://www.example.com/ok.html': '<!doctype html><html><body><p>ok</p></body></html>',
     }
 
     monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'image/jpeg' if 'noext' in url else 'text/html'})
@@ -697,14 +722,14 @@ def test_scrape_site_saves_non_html_content_without_extension(monkeypatch, tmp_p
     conn = sqlite3.connect(str(db))
     rows = dict(conn.execute("SELECT url, content_type FROM pages"))
     conn.close()
-    assert rows.get('https://example.com/img/noext') == 'image/jpeg'
-    assert rows.get('https://example.com/ok.html') == 'text/html'
+    assert rows.get('https://www.example.com/img/noext') == 'image/jpeg'
+    assert rows.get('https://www.example.com/ok.html') == 'text/html'
 
 
 def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
     pages = {
-        'https://example.com/': '<html><body><a href="/a.html">a</a></body></html>',
-        'https://example.com/a.html': '<html><body><p>a</p></body></html>',
+        'https://www.example.com': '<html><body><a href="/a.html">a</a></body></html>',
+        'https://www.example.com/a.html': '<html><body><p>a</p></body></html>',
     }
 
     def _db_urls():
@@ -729,7 +754,7 @@ def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
     first = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=1, max_pages=10)
     assert first['saved_count'] == 2
     assert fetch_calls['count'] == 2
-    assert set(_db_urls()) == {'https://example.com/', 'https://example.com/a.html'}
+    assert set(_db_urls()) == {'https://www.example.com', 'https://www.example.com/a.html'}
 
     def fail_fetch(url, **kwargs):
         raise AssertionError(f'fetch_html should not be called for cached URL: {url}')
@@ -739,7 +764,7 @@ def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
     second = scraper_module.save_site_html('https://example.com', tmp_path, max_depth=1, max_pages=10)
     assert second['saved_count'] == 2
     assert second['failed_count'] == 0
-    assert set(_db_urls()) == {'https://example.com/', 'https://example.com/a.html'}
+    assert set(_db_urls()) == {'https://www.example.com', 'https://www.example.com/a.html'}
 
 
 def _seed_analyze_pages(tmp_path):
