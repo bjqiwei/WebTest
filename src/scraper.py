@@ -44,6 +44,12 @@ CHALLENGE_MARKERS = (
     '503 service temporarily unavailable',
 )
 
+CONTENT_CUTOFF_MARKERS = (
+    # 页面中出现该标记后，其后的内容块全部忽略（例如视频版权/署名行等）
+)
+
+NOISE_KEYWORDS = ('footer', 'cookie', 'consent', 'breadcrumb', 'share', 'language', 'lang-switcher')
+
 NOISE_PARENT_TAGS = {
     'nav',
     'header',
@@ -52,13 +58,13 @@ NOISE_PARENT_TAGS = {
     'noscript',
 }
 
-NOISE_KEYWORDS = ('footer', 'cookie', 'consent', 'breadcrumb', 'share', 'language', 'lang-switcher')
+# 视觉隐藏元素的 class 关键字（如 skip-link、screen-reader-only）
+VISUALLY_HIDDEN_CLASSES = ('skip-link', 'visually-hidden', 'sr-only')
+
 # 精确 class 匹配的噪音容器（不采用子串匹配，避免 sidebar 误匹配 sidebar-wrapper）
 NOISE_EXACT_CLASSES = {'inner-container', 'field__item'}
 
-CONTENT_CUTOFF_MARKERS = (
-    # 页面中出现该标记后，其后的内容块全部忽略（例如视频版权/署名行等）
-)
+
 
 VIDEO_FILE_RE = re.compile(r'\.(mp4|m3u8|webm|ogg)(\?|$)', re.I)
 EMBED_RE = re.compile(r'youtube|youtu\.be|vimeo|player|wistia', re.I)
@@ -289,13 +295,7 @@ def _is_visually_hidden(tag: Tag) -> bool:
     这些元素对屏幕阅读器可见但对视觉用户不可见，不应提取为正文内容。
     """
     classes = ' '.join(tag.get('class', [])).lower()
-    if 'skip-link' in classes:
-        return True
-    if 'visually-hidden' in classes:
-        return True
-    if 'sr-only' in classes:
-        return True
-    return False
+    return any(k in classes for k in VISUALLY_HIDDEN_CLASSES)
 
 
 def _is_in_exact_noise_class(tag: Tag) -> bool:
