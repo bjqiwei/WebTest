@@ -271,6 +271,9 @@ def _normalize_url(url: str) -> str:
     if parsed.scheme not in ('http', 'https'):
         return ''
     path = parsed.path or '/'
+    # 去除路径末尾的斜杠，使 /cat/small-cats 与 /cat/small-cats/ 视为同一 URL
+    if path != '/':
+        path = path.rstrip('/')
     return parsed._replace(path=path, query='', fragment='').geturl()
 
 

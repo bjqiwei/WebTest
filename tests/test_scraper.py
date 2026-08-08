@@ -101,6 +101,39 @@ def test_safe_name_root_url_has_single_index():
     assert scraper_module._safe_name_from_url('https://www.unicef.org/') == 'www.unicef.org'
 
 
+class TestNormalizeUrl:
+    """单元测试 URL 归一化：去 fragment/query、去尾部斜杠。"""
+
+    def test_trailing_slash_collapses(self):
+        assert scraper_module._normalize_url('https://panthera.org/cat/small-cats') == \
+               scraper_module._normalize_url('https://panthera.org/cat/small-cats/')
+
+    def test_trailing_slash_removed(self):
+        assert scraper_module._normalize_url('https://panthera.org/cat/small-cats/') == \
+               'https://panthera.org/cat/small-cats'
+
+    def test_root_kept_as_slash(self):
+        assert scraper_module._normalize_url('https://panthera.org') == 'https://panthera.org/'
+        assert scraper_module._normalize_url('https://panthera.org/') == 'https://panthera.org/'
+
+    def test_query_and_fragment_stripped(self):
+        assert scraper_module._normalize_url('https://panthera.org/cat/small-cats/?utm=1#top') == \
+               'https://panthera.org/cat/small-cats'
+
+
+def test_extract_links_normalizes_trailing_slash():
+    html = '''
+    <html><body>
+      <a href="/cat/small-cats">A</a>
+      <a href="/cat/small-cats/">B</a>
+      <a href="/cat/small-cats/#frag">C</a>
+    </body></html>
+    '''
+    links = scraper_module._extract_links(html, 'https://panthera.org/', 'panthera.org')
+    # 三个不同写法应被归一化为同一个 URL（去重由爬取循环的 queued/visited 集合完成）
+    assert links == ['https://panthera.org/cat/small-cats'] * 3
+
+
 def test_extract_content_blocks_with_image_and_video():
     html = '''
     <html>
