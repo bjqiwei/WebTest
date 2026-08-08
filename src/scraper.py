@@ -977,7 +977,8 @@ def _flush_html_batch(conn: sqlite3.Connection, entries: list):
             " VALUES (?, ?, ?, -1, -1)", rows
         )
         conn.commit()
-    except Exception:
+    except Exception as e:
+        _log(f'批量写入 HTML 缓存失败: {e}')
         pass
 
 
