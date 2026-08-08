@@ -1432,6 +1432,7 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
 
             html = src_html_path.read_text(encoding='utf-8')
             if _is_challenge_or_block_page(html):
+                _log(f'分析时检测到挑战或封锁页面: {current_url}')
                 return {'url': current_url, 'error': 'challenge_or_block', 'video_count': 0, 'image_count': 0}
             blocks = extract_content_blocks(html, current_url)
             video_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'video')
