@@ -61,8 +61,8 @@ NOISE_PARENT_TAGS = {
 # 视觉隐藏元素的 class 关键字（如 skip-link、screen-reader-only）
 VISUALLY_HIDDEN_CLASSES = ('skip-link', 'visually-hidden', 'sr-only')
 
-# 精确 class 匹配的噪音容器（不采用子串匹配，避免 sidebar 误匹配 sidebar-wrapper）
-NOISE_EXACT_CLASSES = {'inner-container', 'field__item'}
+# 文本噪音 class（仅当元素 class 数量为 1 且精确匹配时排除）
+TEXT_NOISE_CLASSES = {'inner-container', 'field__item'}
 
 
 
@@ -298,15 +298,15 @@ def _is_visually_hidden(tag: Tag) -> bool:
     return any(k in classes for k in VISUALLY_HIDDEN_CLASSES)
 
 
-def _is_in_exact_noise_class(tag: Tag) -> bool:
-    """检查元素或其祖先是否只有唯一 class 且该 class 精确匹配 NOISE_EXACT_CLASSES。
+def _is_text_noise_class(tag: Tag) -> bool:
+    """检查元素或其祖先是否只有唯一 class 且该 class 精确匹配 TEXT_NOISE_CLASSES
 
     仅当 class 数量为 1 且完全匹配时才视为噪音容器，
     避免像 field__item swiper-slide 这种带多个 class 的内容容器被误排除。
     """
     def _exact_single(t: Tag) -> bool:
         classes = t.get('class') or []
-        return len(classes) == 1 and classes[0] in NOISE_EXACT_CLASSES
+        return len(classes) == 1 and classes[0] in TEXT_NOISE_CLASSES
 
     if _exact_single(tag):
         return True
@@ -318,6 +318,47 @@ def _is_in_exact_noise_class(tag: Tag) -> bool:
             return True
     return False
 
+
+
+def _is_text_noise(tag: Tag) -> bool:
+    """判断元素的文本是否为噪音，不应作为正文提取。
+
+    包括：<a> 链接文本、按钮、导航项、完全由链接组成的段落等。
+    """
+    # 跳过 <a> 标签中的文本内容（媒体链接已在 _media_from_tag 中处理）
+    if tag.name == 'a':
+        return True
+
+    # 按钮内容不提取（如 "Doná ahora" 捐赠按钮）
+    if _is_button_like(tag):
+        return True
+
+    # 跳过文本噪音 class 容器内的元素
+    if _is_text_noise_class(tag):
+        return True
+
+    # 跳过纯链接导航项：<li> 内只有 <a> 子元素且文本较短（如语言选择器、菜单项）
+    if tag.name == 'li' and all(
+        child.name == 'a' or (isinstance(child, str) and not child.strip())
+        for child in tag.children
+    ):
+        link_text = _clean_text(tag.get_text(' ', strip=True))
+        if len(link_text) < 30:
+            return True
+
+    # 跳过内容完全由 <a> 链接构成的标签（如 "Protección | Auditoría | Transparencia"）
+    if tag.name in ('p', 'li'):
+        a_texts = [a.get_text(' ', strip=True) for a in tag.find_all('a') if a.get_text(' ', strip=True)]
+        if a_texts:
+            full_text = _clean_text(tag.get_text(' ', strip=True))
+            combined_a_text = ' '.join(a_texts)
+            # 去除链接组中常见的分隔符（|、•、/ 等）后再比较
+            sep_clean = re.sub(r'\s*[|•/]\s*', ' ', full_text)
+            sep_clean = _clean_text(sep_clean)
+            if _clean_text(combined_a_text) == sep_clean:
+                return True
+
+    return False
 
 
 def _is_button_like(tag: Tag) -> bool:
@@ -583,38 +624,9 @@ def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
                 blocks.append(media)
             continue
 
-        # 跳过 <a> 标签中的文本内容（媒体链接已在上面处理）
-        if tag.name == 'a':
+        # 跳过文本噪音（链接文本、按钮、导航项等）
+        if _is_text_noise(tag):
             continue
-
-        # 按钮内容不提取（如 "Doná ahora" 捐赠按钮）
-        if _is_button_like(tag):
-            continue
-
-        # 跳过精确 class 匹配的噪音容器内的元素（如 quicknav-wrapper、sidebar）
-        if _is_in_exact_noise_class(tag):
-            continue
-
-        # 跳过纯链接导航项：<li> 内只有 <a> 子元素且文本较短（如语言选择器、菜单项）
-        if tag.name == 'li' and all(
-            child.name == 'a' or (isinstance(child, str) and not child.strip())
-            for child in tag.children
-        ):
-            link_text = _clean_text(tag.get_text(' ', strip=True))
-            if len(link_text) < 30:
-                continue
-
-        # 跳过内容完全由 <a> 链接构成的标签（如 "Protección | Auditoría | Transparencia"）
-        if tag.name in ('p', 'li'):
-            a_texts = [a.get_text(' ', strip=True) for a in tag.find_all('a') if a.get_text(' ', strip=True)]
-            if a_texts:
-                full_text = _clean_text(tag.get_text(' ', strip=True))
-                combined_a_text = ' '.join(a_texts)
-                # 去除链接组中常见的分隔符（|、•、/ 等）后再比较
-                sep_clean = re.sub(r'\s*[|•/]\s*', ' ', full_text)
-                sep_clean = _clean_text(sep_clean)
-                if _clean_text(combined_a_text) == sep_clean:
-                    continue
 
         text = _clean_text(tag.get_text(' ', strip=True))
         if len(text) < 2:
