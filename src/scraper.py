@@ -262,12 +262,34 @@ def _normalize_url(url: str) -> str:
     if parsed.scheme not in ('http', 'https'):
         return ''
     path = parsed.path or '/'
+    # 统一去掉路径末尾的斜杠（含根路径），使 /cat/small-cats 与 /cat/small-cats/、
+    # 以及 panthera.org 与 panthera.org/ 都视为同一 URL（根路径规范为无斜杠形式）
+    path = path.rstrip('/')
     return parsed._replace(path=path, query='', fragment='').geturl()
+
+
+def _remove_scheme(url: str) -> str:
+    """去重用的 key：去掉 scheme（http/https）并移除 host 的 www. 前缀，
+    使 http/https、www./裸域名 都视为同一页面。
+    注意：只移除 host 部分的 www.，不影响路径里的 www。
+    """
+    rest = url.split('://', 1)[-1]
+    if '/' in rest:
+        host, _, path = rest.partition('/')
+    else:
+        host, path = rest, ''
+    if host.lower().startswith('www.'):
+        host = host[4:]
+    return host + ('/' + path if path else '')
 
 
 def _is_same_domain(url: str, root_host: str) -> bool:
     host = urlparse(url).netloc.lower()
     root = root_host.lower()
+    # 把 root 的 www. 前缀去掉再比较，使 www.panthera.org、panthera.org、store.panthera.org
+    # 都归到 apex（panthera.org）下，视为同一域名。
+    if root.startswith('www.'):
+        root = root[4:]
     return host == root or host.endswith(f'.{root}')
 
 
@@ -1078,7 +1100,7 @@ def save_site_html(
     queued = set()
     queue = deque()
     failed_pages: list = _load_failed_pages_from_db(start_url, outdir)
-    failed_urls: set = {p['url'] for p in failed_pages}
+    failed_urls: set = {_remove_scheme(p['url']) for p in failed_pages}
     _log(f'Loaded {len(failed_urls)} failed pages from SQLite.')
     html_cache = _load_html_cache_from_db(start_url, outdir)
     _log(f'Loaded {len(html_cache)} cached pages from SQLite.')
@@ -1097,12 +1119,12 @@ def save_site_html(
         # 只读取 content_type 为 html 的文件来提取链接
         ctype = cached.get('content_type', '')
         if not HTML_CONTENT_TYPE_RE.search(ctype):
-            visited.add(cached_url)
+            visited.add(_remove_scheme(cached_url))
             _log(f'跳过非 HTML 缓存 URL: {cached_url} (content_type={ctype})')
             continue
         # 已分析为无视频的页面（video_count=0）：本地 HTML 可能已被删除，无需再下载
         if cached.get('video_count', -1) == 0:
-            visited.add(cached_url)
+            visited.add(_remove_scheme(cached_url))
             _log(f'跳过已分析且无视频的缓存 URL: {cached_url}')
             continue
         if cached['html_path'] is None:
@@ -1110,7 +1132,7 @@ def save_site_html(
             continue
         cached_html_path = Path(cached['html_path'])
         if cached_html_path.exists():
-            visited.add(cached_url)
+            visited.add(_remove_scheme(cached_url))
         else:
             #_log(f'缓存 HTML 文件不存在: {cached_html_path} (URL: {cached_url})')
             continue
@@ -1124,16 +1146,16 @@ def save_site_html(
                 if _is_challenge_or_block_page(cached_html):
                     _log(f'Cached HTML is a challenge/block page: {cached_url}')
                     cached_html_path.unlink(missing_ok=True)
-                    visited.remove(cached_url)
+                    visited.remove(_remove_scheme(cached_url))
                     continue
                 links = _extract_links(cached_html, cached_url, root_host)
                 dirty_links[cached_url] = links
             except Exception:
                 links = []
-                visited.remove(cached_url)
+                visited.remove(_remove_scheme(cached_url))
 
         for link in links:
-            if link not in visited and link not in failed_urls and link not in queued:
+            if _remove_scheme(link) not in visited and _remove_scheme(link) not in failed_urls and _remove_scheme(link) not in queued:
                 # 从 URL 路径解析深度（path 分段数)
                 cached_path = urlparse(link).path.strip('/')
                 cached_depth = len(cached_path.split('/')) if cached_path else 0
@@ -1141,12 +1163,12 @@ def save_site_html(
                     _log(f"跳过文件链接: {link}")
                     continue
                 queue.append((link, cached_depth))
-                queued.add(link)
+                queued.add(_remove_scheme(link))
 
     # 如果 start_url 不在缓存中，加入队列
-    if start_url not in visited and start_url not in failed_urls and start_url not in queued:
+    if _remove_scheme(start_url) not in visited and _remove_scheme(start_url) not in failed_urls and _remove_scheme(start_url) not in queued:
         queue.appendleft((start_url, 0))
-        queued.add(start_url)
+        queued.add(_remove_scheme(start_url))
     unlimited_depth = max_depth < 0
     unlimited_pages = max_pages <= 0
     max_concurrency = max(1, int(max_concurrency))
@@ -1170,7 +1192,7 @@ def save_site_html(
             'html_path': failed_html_path,
         }
         dirty_failed.append(entry)
-        failed_urls.add(page_url)
+        failed_urls.add(_remove_scheme(page_url))
 
     def _fetch_one(item):
         page_url, _depth = item
@@ -1220,13 +1242,13 @@ def save_site_html(
             if not unlimited_pages and len(html_cache) >= max_pages:
                 return False
             current_url, depth = queue.popleft()
-            queued.discard(current_url)
+            queued.discard(_remove_scheme(current_url))
             if not unlimited_depth and depth > max_depth:
                 _log(f'跳过超出深度限制的 URL: {current_url} (depth={depth})')
                 continue
-            if current_url in visited:
+            if _remove_scheme(current_url) in visited:
                 continue
-            visited.add(current_url)
+            visited.add(_remove_scheme(current_url))
             future = executor.submit(_fetch_one, (current_url, depth))
             pending[future] = (current_url, depth)
             #_log(f'提交线程: {current_url}, 待处理: {len(queue)}')
@@ -1309,14 +1331,14 @@ def save_site_html(
 
                 if links:
                     for link in links:
-                        if link not in visited and link not in failed_urls and link not in queued:
+                        if _remove_scheme(link) not in visited and _remove_scheme(link) not in failed_urls and _remove_scheme(link) not in queued:
                             cached_path = urlparse(link).path.strip('/')
                             cached_depth = len(cached_path.split('/')) if cached_path else 0
                             if is_file_url(link):
                                 _log(f"跳过文件链接: {link}")
                                 continue
                             queue.append((link, cached_depth))
-                            queued.add(link)
+                            queued.add(_remove_scheme(link))
 
             _flush_dirty()
             # 此线程完成，有空闲槽位，立即提交新任务
