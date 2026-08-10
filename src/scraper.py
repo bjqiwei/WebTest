@@ -28,7 +28,9 @@ except Exception:
 # 404/错误页检测关键字
 PAGE_404_MARKERS = (
     'Erreur 404 | Fonds des Nations Unies pour la population',
-    '404 Error Page', 
+    'Error 404 | Fondo de Población de las Naciones Unidas',
+    'عفوًا! الصفحة غير موجودة (خطأ 404)',
+    '404 Error Page',
     'Error 404 | Panthera',
     '404 Not Found',
     )
@@ -788,8 +790,7 @@ def fetch_html_with_playwright(
                 page.wait_for_timeout(1000)
                 if not _is_challenge_or_block_page(page.content()):
                     break
-        else:
-            page.wait_for_timeout(1000)
+        page.wait_for_timeout(1000)
 
         return page.content(), ctype
 
