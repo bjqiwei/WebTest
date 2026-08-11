@@ -50,6 +50,7 @@ CHALLENGE_MARKERS = (
     'too many requests',
     '503 service temporarily unavailable',
     '500 error page',
+    'temporarily unavailable',
 )
 
 CONTENT_CUTOFF_MARKERS = (

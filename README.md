@@ -67,9 +67,17 @@ python scrape.py scrape https://www.bosch.com/careers -o output --all
 **使用 Playwright 渲染 + CDP 连接现有 Chrome（适合复杂页面）：**
 
 ```bash
-python scrape.py save https://www.unicef.org -o d:\unicef --all --renderer playwright --wait-seconds 90 --cdp-url http://127.0.0.1:9222 --concurrency 1
+python scrape.py save https://www.unicef.org -o d:\web\unicef --all --renderer playwright --wait-seconds 90 --cdp-url http://127.0.0.1:9222 --concurrency 1
 ```
-python scrape.py save https://www.unfpa.org -o d:\unfpa --all --renderer playwright --wait-seconds 30 --cdp-url http://127.0.0.1:9222 --concurrency 1
+python scrape.py save https://www.unfpa.org -o d:\web\unfpa --all --renderer playwright --wait-seconds 30 --cdp-url http://127.0.0.1:9222 --concurrency 1
+
+python scrape.py save https://www.nature.org -o d:\web\nature --all --renderer playwright --wait-seconds 30 --cdp-url http://127.0.0.1:9222 --concurrency 1
+
+python scrape.py save https://www.panthera.org  -o d:\web\panthera --all --renderer playwright --wait-seconds 30 --cdp-url http://127.0.0.1:9222 --concurrency 1
+
+python scrape.py save https://www.home.cern  -o d:\web\home --all --renderer playwright --wait-seconds 30 --cdp-url http://127.0.0.1:9222 --concurrency 1
+
+python scrape.py save https://www.ifad.org -o d:\web\ifad --all --renderer playwright --wait-seconds 30 --cdp-url http://127.0.0.1:9222 --concurrency 1
 ```
 
 ## 参数说明
