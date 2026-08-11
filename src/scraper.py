@@ -253,6 +253,13 @@ def _build_output_base_name(url: str, page_index: int, timestamp: str) -> str:
     return f"{page_index:04d}_{page_name}_{timestamp}"
 
 
+def _extract_timestamp_from_stem(path: Path) -> str:
+    match = re.search(r'(\d{14})$', path.stem)
+    if match:
+        return match.group(1)
+    return path.stem
+
+
 def _resolve_url(base: str, link: str) -> str:
     if not link:
         return ''
@@ -1544,7 +1551,7 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
                 # 只有包含视频的页面才保存 HTML + JSON
                 if video_count > 0:
                     try:
-                        timestamp = result['html_path'].stem.rsplit('_html_', 1)[-1]
+                        timestamp = _extract_timestamp_from_stem(result['html_path'])
                         _save_analyze_output(
                             current_url, result['html_path'], analyze_dir, len(result_pages) + 1, timestamp,
                             content_blocks=result['content_blocks'],

@@ -846,6 +846,26 @@ def test_analyze_keeps_html_by_default(tmp_path):
     assert novideo_file.exists(), '默认不应删除无视频页面的 HTML'
 
 
+def test_analyze_output_filename_does_not_duplicate_page_name(tmp_path):
+    start_url = 'https://example.com'
+    analyze_dir = tmp_path / 'analyze'
+    analyze_dir.mkdir()
+    src_path = tmp_path / '0913_threat-human-cat-conflict_20260809132126.html'
+    src_path.write_text('<html></html>', encoding='utf-8')
+
+    dst_html, json_path = scraper_module._save_analyze_output(
+        'https://www.panthera.org/threat-human-cat-conflict',
+        src_path,
+        analyze_dir,
+        page_index=64,
+        timestamp=scraper_module._extract_timestamp_from_stem(src_path),
+        content_blocks=[],
+    )
+
+    assert Path(dst_html).name == '0064_threat-human-cat-conflict_20260809132126.html'
+    assert Path(json_path).name == '0064_threat-human-cat-conflict_20260809132126.json'
+
+
 def test_save_skips_no_video_pages_with_deleted_html(monkeypatch, tmp_path):
     """video_count=0 的页面即使本地 HTML 已被删除，save 时也不会重新下载。"""
     import sqlite3
