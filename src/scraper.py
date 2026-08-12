@@ -40,10 +40,6 @@ PAGE_404_MARKERS = (
 # 注意：匹配必须严格区分大小写，避免把正常页面中的泛词误判。
 CHALLENGE_MARKERS = (
     'Just a moment',
-    'cf-browser-verification',
-    'cf browser verification',
-    'challenge-platform',
-    'cdn-cgi/challenge-platform',
     'Attention required!',
     'Checking your browser',
     'Enable JavaScript and Cookies',
@@ -699,31 +695,38 @@ def _is_html_document(html: str) -> bool:
     return ('<html' in sample) or ('<!doctype html' in sample)
 
 
-def _is_challenge_or_block_page(html: str) -> bool:
-    """Return True only when a real challenge marker appears as a whole phrase.
+def _find_challenge_marker(html: str) -> str | None:
+    """Return the exact marker string that matched, otherwise None.
 
-    Matching is intentionally case-sensitive, so a marker must appear in the exact
-    casing used by the challenge page, not as a lowercased substring.
+    This is mainly for debugging and cleanup scripts: it shows which challenge
+    phrase actually triggered detection instead of only returning True/False.
     """
     if not html:
-        return False
+        return None
 
     sample = re.sub(r'<[^>]+>', ' ', html, flags=re.I | re.S)
     sample = unescape(sample)
     sample = re.sub(r'[\u00a0\s]+', ' ', sample)
     sample = sample.strip()
     if not sample:
-        return False
+        return None
 
     for marker in CHALLENGE_MARKERS:
         normalized = re.sub(r'\s+', ' ', marker.strip())
         if not normalized:
             continue
+        # Only match plain text phrases. Do not match URL/path fragments like
+        # /cdn-cgi/challenge-platform/... which are embedded in JS strings.
         phrase_pattern = r'(?<![A-Za-z0-9])' + r'\s+'.join(re.escape(part) for part in normalized.split()) + r'(?![A-Za-z0-9])'
         if re.search(phrase_pattern, sample):
-            return True
+            return marker
 
-    return False
+    return None
+
+
+def _is_challenge_or_block_page(html: str) -> bool:
+    """Return True only when a real challenge marker appears as a whole phrase."""
+    return _find_challenge_marker(html) is not None
 
 
 def _try_click_challenge_checkbox(page) -> bool:
@@ -815,9 +818,10 @@ def fetch_html_with_playwright(
             return '', ctype
 
         if HTML_CONTENT_TYPE_RE.search(ctype) and _is_challenge_or_block_page(page.content()):
+            marker = _find_challenge_marker(page.content())
             challenge_wait_seconds = max(10.0, wait_seconds)
             challenge_deadline = time.time() + challenge_wait_seconds
-            _log(f'检测到挑战页，额外最多等待{challenge_wait_seconds:.1f}秒: {url}')
+            _log(f'检测到挑战页 {marker}，额外最多等待{challenge_wait_seconds:.1f}秒: {url}')
             while time.time() < challenge_deadline:
                 if _try_click_challenge_checkbox(page):
                     _log(f'已尝试自动勾选安全验证: {url}')
@@ -1178,8 +1182,9 @@ def save_site_html(
                 _log(f'Processing cached URL: {cached_url}')
                 cached_html = cached_html_path.read_text(encoding='utf-8')
                 # 遇到links!=[]的并且是block/challenge页面的情况，并不会执行到这里，需要单独写个程序洗出 block/challenge页面的缓存
-                if _is_challenge_or_block_page(cached_html):
-                    _log(f'Cached HTML is a challenge/block page: {cached_url}')
+                marker = _find_challenge_marker(cached_html)
+                if marker:
+                    _log(f'Cached HTML is a challenge/block page: {cached_url} (标记: {marker})')
                     cached_html_path.unlink(missing_ok=True)
                     visited.remove(_remove_scheme(cached_url))
                     continue
@@ -1333,8 +1338,9 @@ def save_site_html(
                     _append_failed(current_url, 'not_html_content', html)
                     continue
 
-                if _is_challenge_or_block_page(html):
-                    _log(f'挑战或封锁页面: {current_url}')
+                marker = _find_challenge_marker(html)
+                if marker:
+                    _log(f'挑战或封锁页面: {current_url} (检测到标记: {marker})')
                     _append_failed(current_url, 'challenge_or_block', html)
                     continue
 
@@ -1500,8 +1506,9 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
             src_html_path = Path(page['html_path'])
 
             html = src_html_path.read_text(encoding='utf-8')
-            if _is_challenge_or_block_page(html):
-                _log(f'分析时检测到挑战或封锁页面: {current_url}')
+            marker = _find_challenge_marker(html)
+            if marker:  
+                _log(f'分析时检测到挑战或封锁页面: {current_url} (标记: {marker})')
                 return {'url': current_url, 'error': 'challenge_or_block', 'video_count': 0, 'image_count': 0}
             blocks = extract_content_blocks(html, current_url)
             video_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'video')

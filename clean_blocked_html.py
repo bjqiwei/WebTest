@@ -13,7 +13,7 @@ from pathlib import Path
 
 # 确保能找到 src.scraper
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from src.scraper import _is_challenge_or_block_page
+from src.scraper import _find_challenge_marker
 
 NUM_THREADS = 10
 
@@ -45,9 +45,10 @@ def _process_files(file_batch, thread_id, dry_run):
                 print(f'[线程{thread_id}] 读取失败: {fp} ({e})')
             continue
 
-        if _is_challenge_or_block_page(html):
+        marker = _find_challenge_marker(html)
+        if marker:
             with _lock:
-                print(f'[线程{thread_id}] 命中特征: {fp}')
+                print(f'[线程{thread_id}] 命中特征: {marker}, 文件: {fp}')
             if not dry_run:
                 try:
                     fp.unlink()

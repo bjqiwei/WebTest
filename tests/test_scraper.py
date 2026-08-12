@@ -667,6 +667,12 @@ def test_challenge_detector_requires_full_phrase_match():
     assert scraper_module._is_challenge_or_block_page(html) is False
 
 
+def test_challenge_detector_returns_matching_marker():
+    html = '<html><title>Just a moment...</title><body>Checking your browser</body></html>'
+    assert scraper_module._find_challenge_marker(html) == 'Just a moment'
+    assert scraper_module._is_challenge_or_block_page(html) is True
+
+
 def test_fetch_html_playwright_mode(monkeypatch):
     monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: {'html': '<html>pw</html>', 'content_type': 'text/html'})
     result = fetch_html('https://example.com', renderer='playwright')
