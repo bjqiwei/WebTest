@@ -660,6 +660,13 @@ def test_challenge_detector_triggered_by_503_page():
     assert scraper_module._is_challenge_or_block_page(html) is True
 
 
+def test_challenge_detector_requires_full_phrase_match():
+    html = '''<html><body>
+        <p>The resource you are looking for has been removed, had its name changed, or is temporarily unavailable.</p>
+    </body></html>'''
+    assert scraper_module._is_challenge_or_block_page(html) is False
+
+
 def test_fetch_html_playwright_mode(monkeypatch):
     monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: {'html': '<html>pw</html>', 'content_type': 'text/html'})
     result = fetch_html('https://example.com', renderer='playwright')
