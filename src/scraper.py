@@ -686,7 +686,7 @@ def _extract_links(html: str, base_url: str, root_host: str):
             continue
         if not _is_same_domain(resolved, root_host):
             continue
-        links.append(resolved)
+        links.append(resolved.lower())
     return links
 
 
@@ -1335,7 +1335,8 @@ def save_site_html(
 
                 if not HTML_CONTENT_TYPE_RE.search(content_type):
                     _log(f'非 HTML 内容类型: {current_url}, content_type={content_type}')
-                    _append_failed(current_url, 'not_html_content', html)
+                    html_cache.append({'url': current_url, 'html_path': None, 'content_type': content_type})
+                    dirty_html.append({'url': current_url, 'html_path': None, 'content_type': content_type})
                     continue
 
                 marker = _find_challenge_marker(html)
