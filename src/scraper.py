@@ -34,6 +34,7 @@ PAGE_404_MARKERS = (
     '404 Error Page',
     'Error 404 | Panthera',
     '404 Not Found',
+    'Page Not Found',
     )
 
 # 挑战页/封锁页检测关键字
@@ -278,6 +279,12 @@ def _normalize_url(url: str) -> str:
     # 以及 panthera.org 与 panthera.org/ 都视为同一 URL（根路径规范为无斜杠形式）
     path = path.rstrip('/')
     return parsed._replace(path=path, query='', fragment='').geturl()
+
+
+def _url_depth(url: str) -> int:
+    """按路径段数计算深度；根路径返回 0。"""
+    path = urlparse(url).path.strip('/')
+    return len([segment for segment in path.split('/') if segment]) if path else 0
 
 
 def _remove_scheme(url: str) -> str:
@@ -1145,7 +1152,7 @@ def save_site_html(
     _log(f'Loaded {len(html_cache)} cached pages from SQLite.')
     links_cache = _load_links_cache_from_db(start_url, outdir)
     _log(f'Loaded {len(links_cache)} cached links from SQLite.')
-    conn = _init_db(_scrape_db_path(start_url, outdir))  # 单个持久连接，含 pages + failed_pages 两张表
+    conn = _init_db(_scrape_db_path(start_url, outdir))  # 单个持久连接
     _log(f'Initialized SQLite database at {_scrape_db_path(start_url, outdir)}.')
     dirty_html: list = []  # 自上次 flush 后新增的页面记录
     dirty_links: dict = {}  # 记录自上次 flush 后变更的 url -> links
@@ -1196,18 +1203,15 @@ def save_site_html(
 
         for link in links:
             if _remove_scheme(link) not in visited and _remove_scheme(link) not in failed_urls and _remove_scheme(link) not in queued:
-                # 从 URL 路径解析深度（path 分段数)
-                cached_path = urlparse(link).path.strip('/')
-                cached_depth = len(cached_path.split('/')) if cached_path else 0
                 if is_file_url(link):
                     _log(f"跳过文件链接: {link}")
                     continue
-                queue.append((link, cached_depth))
+                queue.append(link)
                 queued.add(_remove_scheme(link))
 
     # 如果 start_url 不在缓存中，加入队列
     if _remove_scheme(start_url) not in visited and _remove_scheme(start_url) not in failed_urls and _remove_scheme(start_url) not in queued:
-        queue.appendleft((start_url, 0))
+        queue.appendleft(start_url)
         queued.add(_remove_scheme(start_url))
     unlimited_depth = max_depth < 0
     unlimited_pages = max_pages <= 0
@@ -1234,8 +1238,7 @@ def save_site_html(
         dirty_failed.append(entry)
         failed_urls.add(_remove_scheme(page_url))
 
-    def _fetch_one(item):
-        page_url, _depth = item
+    def _fetch_one(page_url):
         try:
             fetch_result = fetch_html(
                 page_url,
@@ -1274,23 +1277,24 @@ def save_site_html(
     if callable(phase_callback):
         phase_callback('saving_html')
 
-    pending = {}  # {Future: (url, depth)}
+    pending = {}  # {Future: url}
 
     def _try_submit():
         """从队列取一个 URL 提交到线程池，返回是否成功提交。"""
         while queue:
             if not unlimited_pages and len(html_cache) >= max_pages:
                 return False
-            current_url, depth = queue.popleft()
+            current_url = queue.popleft()
             queued.discard(_remove_scheme(current_url))
+            depth = _url_depth(current_url)
             if not unlimited_depth and depth > max_depth:
                 _log(f'跳过超出深度限制的 URL: {current_url} (depth={depth})')
                 continue
             if _remove_scheme(current_url) in visited:
                 continue
             visited.add(_remove_scheme(current_url))
-            future = executor.submit(_fetch_one, (current_url, depth))
-            pending[future] = (current_url, depth)
+            future = executor.submit(_fetch_one, current_url)
+            pending[future] = current_url
             #_log(f'提交线程: {current_url}, 待处理: {len(queue)}')
             return True
         return False
@@ -1317,7 +1321,7 @@ def save_site_html(
             done, _ = wait(pending.keys(), return_when=FIRST_COMPLETED)
 
             for future in done:
-                current_url, depth = pending.pop(future)
+                current_url = pending.pop(future)
                 item = future.result()
 
                 if not item:
@@ -1374,12 +1378,10 @@ def save_site_html(
                 if links:
                     for link in links:
                         if _remove_scheme(link) not in visited and _remove_scheme(link) not in failed_urls and _remove_scheme(link) not in queued:
-                            cached_path = urlparse(link).path.strip('/')
-                            cached_depth = len(cached_path.split('/')) if cached_path else 0
                             if is_file_url(link):
                                 _log(f"跳过文件链接: {link}")
                                 continue
-                            queue.append((link, cached_depth))
+                            queue.append(link)
                             queued.add(_remove_scheme(link))
 
             _flush_dirty()
