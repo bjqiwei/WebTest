@@ -815,6 +815,9 @@ def fetch_html_with_playwright(
                 html_text = body_bytes.decode('utf-8', errors='replace')
                 ctype = api_resp.headers.get('content-type', '')
                 return html_text, ctype
+            if 'net::ERR_ABORTED' in err_msg:
+                _log(f'错误: {goto_err}')
+                return '', 'net::ERR_ABORTED'
             raise
 
         try:
