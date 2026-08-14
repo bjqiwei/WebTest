@@ -36,6 +36,7 @@ PAGE_404_MARKERS = (
     '404 Not Found',
     'Page Not Found',
     '404 Error'
+    'Page non trouvée – Home | CERN',
     )
 
 # 挑战页/封锁页检测关键字
@@ -928,6 +929,15 @@ def fetch_html(
     return {'html': html, 'content_type': ctype}
 
 
+def _extract_html_title(html: str) -> str:
+    """从 HTML 中提取 <title>。如果没有 title，返回空字符串。"""
+    soup = BeautifulSoup(html, 'html.parser')
+    title = soup.title
+    if title is None:
+        return ''
+    return _clean_text(title.get_text(' ', strip=True))
+
+
 def _save_html_snapshot(url: str, html: str, outdir: Path, page_index: int, timestamp: str) -> str:
     base_name = _build_output_base_name(url, page_index, timestamp)
     filename = f"{base_name}.html"
@@ -977,6 +987,7 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         "  url TEXT PRIMARY KEY,"
         "  html_path TEXT DEFAULT NULL,"
         "  content_type TEXT NOT NULL DEFAULT '',"
+        "  title TEXT DEFAULT NULL,"
         "  links TEXT DEFAULT NULL,"
         "  video_count INTEGER NOT NULL DEFAULT -1,"
         "  image_count INTEGER NOT NULL DEFAULT -1,"
@@ -1000,9 +1011,9 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         pass
 
     # 为已有 pages 表补充新增字段
-    for col in ('video_count', 'image_count', 'links'):
+    for col in ('video_count', 'image_count', 'links', 'title'):
         try:
-            if col == 'links':
+            if col == 'links' or col == 'title':
                 conn.execute(f"ALTER TABLE pages ADD COLUMN {col} TEXT DEFAULT NULL")
             else:
                 conn.execute(f"ALTER TABLE pages ADD COLUMN {col} INTEGER NOT NULL DEFAULT -1")
@@ -1020,15 +1031,15 @@ def _load_html_cache_from_db(start_url: str, outdir: Path) -> list:
     try:
         conn = sqlite3.connect(str(db_path))
         conn.execute("PRAGMA journal_mode=WAL")
-        cursor = conn.execute("SELECT url, html_path, content_type, video_count FROM pages")
+        cursor = conn.execute("SELECT url, html_path, content_type, video_count, title FROM pages")
         cache = []
-        for url, html_path, content_type, video_count in cursor:
+        for url, html_path, content_type, video_count, title in cursor:
             if html_path:
                 p = Path(html_path)
                 if not p.is_absolute():
                     p = outdir / p
                 html_path = str(p)
-            cache.append({'url': url, 'html_path': html_path, 'content_type': content_type, 'video_count': video_count})
+            cache.append({'url': url, 'html_path': html_path, 'content_type': content_type, 'video_count': video_count, 'title': title})
         conn.close()
         return cache
     except Exception:
@@ -1040,10 +1051,10 @@ def _flush_html_batch(conn: sqlite3.Connection, entries: list):
     if not entries:
         return
     try:
-        rows = [(e['url'], e['html_path'], e.get('content_type', '')) for e in entries]
+        rows = [(e['url'], e['html_path'], e.get('content_type'), e.get('title')) for e in entries]
         conn.executemany(
-            "INSERT OR REPLACE INTO pages (url, html_path, content_type, video_count, image_count)"
-            " VALUES (?, ?, ?, -1, -1)", rows
+            "INSERT OR REPLACE INTO pages (url, html_path, content_type, title, video_count, image_count)"
+            " VALUES (?, ?, ?, ?, -1, -1)", rows
         )
         conn.commit()
     except Exception as e:
@@ -1175,8 +1186,6 @@ def save_site_html(
         # 已分析为无视频的页面（video_count=0）：本地 HTML 可能已被删除，无需再下载
         if cached.get('video_count', -1) == 0:
             visited.add(_remove_scheme(cached_url))
-            _log(f'跳过已分析且无视频的缓存 URL: {cached_url}')
-            continue
         if cached['html_path'] is None:
             #_log(f'缓存记录 html_path 为空: {cached_url}')
             continue
@@ -1212,6 +1221,19 @@ def save_site_html(
                     continue
                 queue.append(link)
                 queued.add(_remove_scheme(link))
+        if cached.get('title') is None:
+            try:
+                cached_html = cached_html_path.read_text(encoding='utf-8')
+                title = _extract_html_title(cached_html)
+                cached['title'] = title
+                conn.execute(
+                    "UPDATE pages SET title = ? WHERE url = ?",
+                    (title, cached_url),
+                )
+                conn.commit()
+                _log(f'已更新缓存页面标题: {cached_url} -> {title}')
+            except Exception:
+                pass
 
     # 如果 start_url 不在缓存中，加入队列
     if _remove_scheme(start_url) not in visited and _remove_scheme(start_url) not in failed_urls and _remove_scheme(start_url) not in queued:
@@ -1343,8 +1365,8 @@ def save_site_html(
 
                 if not HTML_CONTENT_TYPE_RE.search(content_type):
                     _log(f'非 HTML 内容类型: {current_url}, content_type={content_type}')
-                    html_cache.append({'url': current_url, 'html_path': None, 'content_type': content_type})
-                    dirty_html.append({'url': current_url, 'html_path': None, 'content_type': content_type})
+                    html_cache.append({'url': current_url, 'html_path': None, 'content_type': content_type, 'title': None})
+                    dirty_html.append({'url': current_url, 'html_path': None, 'content_type': content_type, 'title': None})
                     continue
 
                 marker = _find_challenge_marker(html)
@@ -1372,8 +1394,9 @@ def save_site_html(
                     _log(f'保存 HTML 失败: {current_url}, 错误: {e}')
                     continue
 
-                html_cache.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
-                dirty_html.append({'url': current_url, 'html_path': html_path, 'content_type': content_type})
+                title = _extract_html_title(html)
+                html_cache.append({'url': current_url,'html_path': html_path,'content_type': content_type,'title': title})
+                dirty_html.append({'url': current_url,'html_path': html_path,'content_type': content_type,'title': title})
 
                 links = item.get('links', None)
                 if HTML_CONTENT_TYPE_RE.search(content_type) and links is not None:

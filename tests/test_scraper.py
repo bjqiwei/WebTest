@@ -823,6 +823,66 @@ def test_scrape_site_saves_non_html_content_without_extension(monkeypatch, tmp_p
     assert rows.get('https://www.example.com/ok.html') == 'text/html'
 
 
+def test_save_site_html_persists_title_in_pages_table(monkeypatch, tmp_path):
+    import sqlite3
+
+    def fake_fetch(url, **kwargs):
+        return {
+            'html': '<html><head><title>Example Title</title></head><body>ok</body></html>',
+            'content_type': 'text/html',
+        }
+
+    monkeypatch.setattr('src.scraper.fetch_html', fake_fetch)
+    scraper_module.save_site_html('https://www.example.com', tmp_path, max_depth=0, max_pages=10)
+
+    db_path = scraper_module._scrape_db_path('https://www.example.com', tmp_path)
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute(
+        "SELECT title FROM pages WHERE url = ?",
+        ('https://www.example.com',),
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] == 'Example Title'
+
+
+def test_load_html_cache_from_db_rehydrates_missing_title(tmp_path):
+    import sqlite3
+
+    html_path = tmp_path / 'page.html'
+    html_path.write_text('<html><head><title>Recovered Title</title></head><body>x</body></html>', encoding='utf-8')
+
+    db_path = scraper_module._scrape_db_path('https://example.com', tmp_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS pages ("
+        "  url TEXT PRIMARY KEY,"
+        "  html_path TEXT DEFAULT NULL,"
+        "  content_type TEXT NOT NULL DEFAULT '',"
+        "  title TEXT DEFAULT NULL,"
+        "  links TEXT DEFAULT NULL,"
+        "  video_count INTEGER NOT NULL DEFAULT -1,"
+        "  image_count INTEGER NOT NULL DEFAULT -1,"
+        "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))"
+        ")"
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO pages (url, html_path, content_type, title, video_count, image_count) VALUES (?, ?, ?, ?, ?, ?)",
+        ('https://example.com', str(html_path), 'text/html', '', -1, -1),
+    )
+    conn.commit()
+    conn.close()
+
+    cache = scraper_module._load_html_cache_from_db('https://example.com', tmp_path)
+
+    assert cache[0]['title'] == 'Recovered Title'
+
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute("SELECT title FROM pages WHERE url = ?", ('https://example.com',)).fetchone()
+    conn.close()
+    assert row[0] == 'Recovered Title'
+
+
 def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
     pages = {
         'https://www.example.com': '<html><body><a href="/a.html">a</a></body></html>',
