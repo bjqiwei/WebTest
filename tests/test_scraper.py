@@ -108,6 +108,27 @@ def test_url_depth_is_derived_from_path_segments_only():
     assert scraper_module._url_depth('https://example.com/a/b/c') == 3
 
 
+def test_is_404_page_uses_title_only():
+    """正文里出现 404 词不应触发 404 判定，必须看 title。"""
+    html = '''
+    <html>
+      <head><title>Home</title></head>
+      <body>
+        <h1>404 Not Found</h1>
+      </body>
+    </html>
+    '''
+    assert scraper_module._is_404_page(html) is False
+
+    html = '''
+    <html>
+      <head><title>Error 404 | Panthera</title></head>
+      <body><p>Some content</p></body>
+    </html>
+    '''
+    assert scraper_module._is_404_page(html) is True
+
+
 def test_is_same_domain_ignores_www_prefix():
     """_is_same_domain 应忽略 root_host 的 www. 前缀，子域名视为同域。"""
     # root 带 www 时，裸域名与子域名都算同域

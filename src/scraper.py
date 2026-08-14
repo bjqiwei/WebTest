@@ -35,6 +35,7 @@ PAGE_404_MARKERS = (
     'Error 404 | Panthera',
     '404 Not Found',
     'Page Not Found',
+    '404 Error'
     )
 
 # 挑战页/封锁页检测关键字
@@ -470,16 +471,21 @@ def _nearby_description(tag: Tag) -> str:
 def _is_404_page(html: str) -> bool:
     """判断页面是否为 404/错误页。
 
-    遍历所有元素，若任一元素的文本内容（去除首尾空白）与 PAGE_404_MARKERS
-    中的某个值完全相等（区分大小写），则判定为 404 页。
+    仅检查 <title> 标签内容，忽略正文中可能出现的相同词语，避免把正常页面误判为 404。
     """
     soup = BeautifulSoup(html, 'html.parser')
+    title = soup.title
+    if title is None:
+        return False
+
+    text = _clean_text(title.get_text(' ', strip=True))
+    if not text:
+        return False
+
     markers = tuple(m.strip() for m in PAGE_404_MARKERS)
-    for tag in soup.find_all(text=True):
-        text = tag.strip()
-        if text in markers:
-            _log(f'检测到 404/错误页标记: {text}')
-            return True
+    if text in markers:
+        _log(f'检测到 404/错误页 title 标记: {text}')
+        return True
     return False
 
 
