@@ -678,8 +678,7 @@ def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
     return blocks
 
 
-def _extract_links(html: str, base_url: str, root_host: str):
-    soup = BeautifulSoup(html, 'html.parser')
+def _extract_links(soup: BeautifulSoup, base_url: str, root_host: str):
     links = []
     for a in soup.find_all('a', href=True):
         href = a.get('href', '').strip()
@@ -929,9 +928,8 @@ def fetch_html(
     return {'html': html, 'content_type': ctype}
 
 
-def _extract_html_title(html: str) -> str:
+def _extract_html_title(soup: BeautifulSoup) -> str:
     """从 HTML 中提取 <title>。如果没有 title，返回空字符串。"""
-    soup = BeautifulSoup(html, 'html.parser')
     title = soup.title
     if title is None:
         return ''
@@ -1208,7 +1206,8 @@ def save_site_html(
                     cached_html_path.unlink(missing_ok=True)
                     visited.remove(_remove_scheme(cached_url))
                     continue
-                links = _extract_links(cached_html, cached_url, root_host)
+                soup = BeautifulSoup(cached_html, 'html.parser')
+                links = _extract_links(soup, cached_url, root_host)
                 dirty_links[cached_url] = links
             except Exception:
                 links = []
@@ -1224,7 +1223,8 @@ def save_site_html(
         if cached.get('title') is None:
             try:
                 cached_html = cached_html_path.read_text(encoding='utf-8')
-                title = _extract_html_title(cached_html)
+                soup = BeautifulSoup(cached_html, 'html.parser')
+                title = _extract_html_title(soup)
                 cached['title'] = title
                 conn.execute(
                     "UPDATE pages SET title = ? WHERE url = ?",
@@ -1277,11 +1277,18 @@ def save_site_html(
             content_type = fetch_result.get('content_type', '')
             # 在线程内提取链接，避免主线程串行解析
             links = None
+            title = None
             if HTML_CONTENT_TYPE_RE.search(content_type):
+                soup = BeautifulSoup(html_text, 'html.parser')
                 try:
-                    links = _extract_links(html_text, page_url, root_host)
+                    links = _extract_links(soup, page_url, root_host)
                 except Exception:
                     links = None
+                try:
+                    title = _extract_html_title(soup)
+                except Exception:
+                    title = None
+
             return {
                 'url': page_url,
                 'html': html_text,
@@ -1289,6 +1296,7 @@ def save_site_html(
                 'error': '',
                 'content_type': content_type,
                 'links': links,
+                'title': title,
             }
         except Exception as exc:
             return {
@@ -1298,6 +1306,7 @@ def save_site_html(
                 'error': str(exc),
                 'content_type': '',
                 'links': None,
+                'title': None,
             }
 
     if callable(phase_callback):
@@ -1394,7 +1403,7 @@ def save_site_html(
                     _log(f'保存 HTML 失败: {current_url}, 错误: {e}')
                     continue
 
-                title = _extract_html_title(html)
+                title =item.get('title', None)
                 html_cache.append({'url': current_url,'html_path': html_path,'content_type': content_type,'title': title})
                 dirty_html.append({'url': current_url,'html_path': html_path,'content_type': content_type,'title': title})
 
