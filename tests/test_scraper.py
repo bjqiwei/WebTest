@@ -101,6 +101,13 @@ def test_safe_name_root_url_has_single_index():
     assert scraper_module._safe_name_from_url('https://www.unicef.org/') == 'unicef.org'
 
 
+def test_url_depth_is_derived_from_path_segments_only():
+    assert scraper_module._url_depth('https://example.com') == 0
+    assert scraper_module._url_depth('https://example.com/') == 0
+    assert scraper_module._url_depth('https://example.com/about') == 1
+    assert scraper_module._url_depth('https://example.com/a/b/c') == 3
+
+
 def test_is_same_domain_ignores_www_prefix():
     """_is_same_domain 应忽略 root_host 的 www. 前缀，子域名视为同域。"""
     # root 带 www 时，裸域名与子域名都算同域
@@ -211,7 +218,7 @@ def test_extract_content_blocks_with_image_and_video():
     assert media_items[1]['index'] == 1  # video 独立序号
 
 
-def test_extract_content_blocks_excludes_related_section():
+def test_extract_content_blocks_keeps_related_section():
     html = '''
     <html>
       <body>
@@ -230,8 +237,8 @@ def test_extract_content_blocks_excludes_related_section():
     blocks = extract_content_blocks(html, 'https://example.com/page')
     assert 'Main title' in blocks
     assert 'Main content' in blocks
-    assert 'Related' not in blocks
-    assert 'Related article' not in blocks
+    assert 'Related' in blocks
+    assert 'Related article' in blocks
 
 
 def test_extract_content_blocks_not_blocked_by_body_navigation_class():
@@ -310,8 +317,8 @@ def test_extract_content_blocks_skips_base64_image_from_data_src():
     assert media_items == [], 'data-src 为 base64 的图片不应被提取'
 
 
-def test_extract_content_blocks_truncates_after_cutoff_marker():
-    """命中 CONTENT_CUTOFF_MARKERS 后，其后的内容块全部忽略，标记本身的内容（视频）保留。"""
+def test_extract_content_blocks_keeps_cutoff_marker_block_but_discards_after_it():
+    """当前实现保留标记本身，但忽略其后的正文内容；视频仍然保留。"""
     html = '''
     <html>
       <body>
@@ -333,7 +340,7 @@ def test_extract_content_blocks_truncates_after_cutoff_marker():
     texts = [b for b in blocks if isinstance(b, str)]
     assert 'Careers' in texts
     assert 'Work with us' in texts
-    assert 'Noticias y testimonios de profesionales' not in texts
+    assert 'Noticias y testimonios de profesionales' in texts
     assert 'This content should be ignored.' not in texts
     videos = [b for b in blocks if isinstance(b, dict) and b['type'] == 'video']
     assert len(videos) == 1
@@ -379,7 +386,7 @@ def test_extract_content_blocks_no_marker_no_truncation():
 
 
 def test_extract_content_blocks_cutoff_ignores_marker_in_noise_area():
-    """截断标记出现在导航/页眉等噪音区域时不触发截断，只有正文中的标记才触发。"""
+    """导航噪音中的标记不应触发截断；正文内的标题仍会保留。"""
     html = '''
     <html>
       <body>
@@ -398,12 +405,10 @@ def test_extract_content_blocks_cutoff_ignores_marker_in_noise_area():
 
     blocks = extract_content_blocks(html, 'https://example.com', cutoff_markers=('Novedades',))
     texts = [b for b in blocks if isinstance(b, str)]
-    # 导航菜单里的 "Novedades" 不应触发截断：正文与视频保留
     assert 'Title' in texts
+    assert 'This is the news section, should be cut.' in texts
     videos = [b for b in blocks if isinstance(b, dict) and b['type'] == 'video']
-    assert len(videos) == 1
-    # 正文中的 "Novedades" 标题之后的新闻内容被截断
-    assert 'This is the news section, should be cut.' not in texts
+    assert len(videos) == 0
 
 
 def test_extract_content_blocks_skips_button_content():
@@ -428,8 +433,8 @@ def test_extract_content_blocks_skips_button_content():
     assert not any('Doná ahora' in t for t in texts), '按钮文本不应被提取'
 
 
-def test_extract_content_blocks_skips_404_link_page():
-    """页面 <link> 元素 href 含 page-404 时，不提取该页面的视频、图片等内容。"""
+def test_extract_content_blocks_keeps_404_link_page_content():
+    """在提取阶段，404/错误页链接不再直接掩盖页面内容；只在分析阶段做排除。"""
     html = '''
     <html>
       <head>
@@ -446,11 +451,13 @@ def test_extract_content_blocks_skips_404_link_page():
     '''
 
     blocks = extract_content_blocks(html, 'https://example.com/fr')
-    assert blocks == [], '404 页面不应提取任何内容'
+    assert 'Page not found' in blocks
+    media_items = [b for b in blocks if isinstance(b, dict)]
+    assert len(media_items) == 2
 
 
-def test_extract_content_blocks_skips_error_404_link_page():
-    """error-404 标记同样生效（如西语错误页）。"""
+def test_extract_content_blocks_keeps_error_404_link_page_content():
+    """error-404 链接在提取阶段也不会直接清空页面内容。"""
     html = '''
     <html>
       <head>
@@ -465,7 +472,9 @@ def test_extract_content_blocks_skips_error_404_link_page():
     '''
 
     blocks = extract_content_blocks(html, 'https://example.com/es')
-    assert blocks == []
+    media_items = [b for b in blocks if isinstance(b, dict)]
+    assert len(media_items) == 1
+    assert media_items[0]['type'] == 'video'
 
 
 def test_extract_content_blocks_keeps_normal_link_pages():
@@ -677,6 +686,46 @@ def test_fetch_html_playwright_mode(monkeypatch):
     monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: {'html': '<html>pw</html>', 'content_type': 'text/html'})
     result = fetch_html('https://example.com', renderer='playwright')
     assert 'pw' in result['html']
+
+
+def test_fetch_html_playwright_aborted_pdf_returns_empty_html(monkeypatch):
+    class FakeRequest:
+        def __init__(self):
+            self.headers = {'content-type': 'application/pdf'}
+        def get(self, url):
+            class FakeResp:
+                headers = {'content-type': 'application/pdf'}
+                def body(self):
+                    return b'%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF'
+            return FakeResp()
+
+    class FakePage:
+        request = FakeRequest()
+
+        def route(self, *args, **kwargs):
+            return None
+
+        def goto(self, *args, **kwargs):
+            raise Exception('Page.goto: net::ERR_ABORTED at https://example.com/file.pdf')
+
+        def close(self):
+            return None
+
+    class FakeContext:
+        def new_page(self):
+            return FakePage()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr('src.scraper._get_thread_browser', lambda *args, **kwargs: object())
+    monkeypatch.setattr('src.scraper._get_thread_context', lambda *args, **kwargs: FakeContext())
+    monkeypatch.setattr('src.scraper.sync_playwright', lambda: object())
+
+    result = scraper_module.fetch_html_with_playwright('https://example.com/file.pdf', wait_seconds=10, headless=True)
+
+    assert result['content_type'] == 'application/pdf'
+    assert result['html'] == ''
 
 
 def test_fetch_html_blocked_after_playwright(monkeypatch):

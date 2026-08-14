@@ -467,12 +467,13 @@ def _nearby_description(tag: Tag) -> str:
     return ''
 
 
-def _is_404_page(soup: BeautifulSoup) -> bool:
+def _is_404_page(html: str) -> bool:
     """判断页面是否为 404/错误页。
 
     遍历所有元素，若任一元素的文本内容（去除首尾空白）与 PAGE_404_MARKERS
     中的某个值完全相等（区分大小写），则判定为 404 页。
     """
+    soup = BeautifulSoup(html, 'html.parser')
     markers = tuple(m.strip() for m in PAGE_404_MARKERS)
     for tag in soup.find_all(text=True):
         text = tag.strip()
@@ -609,12 +610,6 @@ def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
         cutoff_markers = CONTENT_CUTOFF_MARKERS
 
     soup = BeautifulSoup(html, 'html.parser')
-
-    # 404/错误页：页面 <link> 元素 href 含 page-404/error-404 时，不提取该页面的
-    # 视频、图片等内容（整个页面视为无效）。
-    if _is_404_page(soup):
-        _log(f'检测到 404/错误页，跳过内容提取, url: {base_url}')
-        return []
 
     root = soup.find('main') or soup.body or soup
 
@@ -1504,10 +1499,10 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
         try:
             content_type = page.get('content_type', '')
             if not HTML_CONTENT_TYPE_RE.search(content_type):
-                return {'url': current_url, 'error': 'not_html_content_type', 'video_count': 0, 'image_count': 0}
+                return {'url': current_url, 'error': 'not_html_content_type', 'video_count': -2, 'image_count': -2}
 
             if page.get('html_path') is None:
-                return {'url': current_url, 'error': 'html_path_is_null', 'video_count': 0, 'image_count': 0}
+                return {'url': current_url, 'error': 'html_path_is_null', 'video_count': -3, 'image_count': -3}
 
             src_html_path = Path(page['html_path'])
 
@@ -1515,7 +1510,14 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
             marker = _find_challenge_marker(html)
             if marker:  
                 _log(f'分析时检测到挑战或封锁页面: {current_url} (标记: {marker})')
-                return {'url': current_url, 'error': 'challenge_or_block', 'video_count': 0, 'image_count': 0}
+                return {'url': current_url, 'error': 'challenge_or_block', 'video_count': -4, 'image_count': -4}
+
+            # 404/错误页：页面 <link> 元素 href 含 page-404/error-404 时，不提取该页面的
+            # 视频、图片等内容（整个页面视为无效）。
+            if _is_404_page(html):
+                _log(f'检测到 404/错误页，跳过内容提取, url: {current_url}')
+                return {'url': current_url, 'error': '404_or_error_page', 'video_count': -5, 'image_count': -5}
+
             blocks = extract_content_blocks(html, current_url)
             video_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'video')
             image_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'image')
@@ -1531,7 +1533,8 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
             }
 
         except Exception as e:
-            return {'url': current_url, 'error': str(e), 'video_count': 0, 'image_count': 0}
+            _log(f'分析页面异常: {current_url}, 错误: {e}')
+            return {'url': current_url, 'error': str(e), 'video_count': -6, 'image_count': -6}
 
     max_workers = min(8, len(raw_pages) or 1)
     executor = ThreadPoolExecutor(max_workers=max_workers)
