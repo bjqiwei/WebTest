@@ -35,9 +35,11 @@ PAGE_404_MARKERS = (
     'Error 404 | Panthera',
     '404 Not Found',
     'Page Not Found',
-    '404 Error'
+    '404 Error',
     'Page non trouvée – Home | CERN',
-    )
+    'Page not available – Home | CERN',
+    'Page not found – Home | CERN',
+)
 
 # 挑战页/封锁页检测关键字
 # 注意：匹配必须严格区分大小写，避免把正常页面中的泛词误判。
@@ -54,8 +56,8 @@ CHALLENGE_MARKERS = (
     '安全服务防护恶意自动程序',
     'Too Many Requests',
     '503 Service Temporarily Unavailable',
-    '500 Error Page',
-    'Temporarily Unavailable',
+    #'500 Error Page',
+    #'Temporarily Unavailable',
 )
 
 CONTENT_CUTOFF_MARKERS = (
@@ -1193,6 +1195,22 @@ def save_site_html(
         else:
             #_log(f'缓存 HTML 文件不存在: {cached_html_path} (URL: {cached_url})')
             continue
+
+        if cached.get('title') is None:
+            try:
+                cached_html = cached_html_path.read_text(encoding='utf-8')
+                soup = BeautifulSoup(cached_html, 'html.parser')
+                title = _extract_html_title(soup)
+                cached['title'] = title
+                conn.execute(
+                    "UPDATE pages SET title = ? WHERE url = ?",
+                    (title, cached_url),
+                )
+                conn.commit()
+                _log(f'已更新缓存页面标题: {cached_url} -> {title}')
+            except Exception:
+                pass
+
         # 优先从 links_cache 读取，否则回退到解析 HTML
         links = links_cache.get(cached_url, None)
         if links is None:
@@ -1220,20 +1238,6 @@ def save_site_html(
                     continue
                 queue.append(link)
                 queued.add(_remove_scheme(link))
-        if cached.get('title') is None:
-            try:
-                cached_html = cached_html_path.read_text(encoding='utf-8')
-                soup = BeautifulSoup(cached_html, 'html.parser')
-                title = _extract_html_title(soup)
-                cached['title'] = title
-                conn.execute(
-                    "UPDATE pages SET title = ? WHERE url = ?",
-                    (title, cached_url),
-                )
-                conn.commit()
-                _log(f'已更新缓存页面标题: {cached_url} -> {title}')
-            except Exception:
-                pass
 
     # 如果 start_url 不在缓存中，加入队列
     if _remove_scheme(start_url) not in visited and _remove_scheme(start_url) not in failed_urls and _remove_scheme(start_url) not in queued:
