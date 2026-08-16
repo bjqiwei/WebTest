@@ -62,6 +62,7 @@ CHALLENGE_MARKERS = (
 
 CONTENT_CUTOFF_MARKERS = (
     # 页面中出现该标记后，其后的内容块全部忽略（例如视频版权/署名行等）
+    'Related Articles',
 )
 
 NOISE_KEYWORDS = ('footer', 'cookie', 'consent', 'breadcrumb', 'share', 'language', 'lang-switcher')
@@ -77,8 +78,12 @@ NOISE_PARENT_TAGS = {
 # 视觉隐藏元素的 class 关键字（如 skip-link、screen-reader-only）
 VISUALLY_HIDDEN_CLASSES = ('skip-link', 'visually-hidden', 'sr-only')
 
-# 文本噪音 class（仅当元素 class 数量为 1 且精确匹配时排除）
-TEXT_NOISE_CLASSES = {'inner-container', 'field__item'}
+# 文本噪音 class（仅当元素 class 集合与其中一个候选完全一致时排除）
+NOISE_CLASSES = (
+    frozenset({'inner-container'}),
+    frozenset({'field__item'}),
+    frozenset({'wp-block-cover', 'alignfull'}),
+)
 
 
 
@@ -340,23 +345,23 @@ def _is_visually_hidden(tag: Tag) -> bool:
     return any(k in classes for k in VISUALLY_HIDDEN_CLASSES)
 
 
-def _is_text_noise_class(tag: Tag) -> bool:
-    """检查元素或其祖先是否只有唯一 class 且该 class 精确匹配 TEXT_NOISE_CLASSES
+def _is_noise_class(tag: Tag) -> bool:
+    """仅当元素或其祖先的 class 集合与噪音候选完全一致时才跳过。
 
-    仅当 class 数量为 1 且完全匹配时才视为噪音容器，
-    避免像 field__item swiper-slide 这种带多个 class 的内容容器被误排除。
+    这里要求精确匹配，而不是前缀/包含匹配，因此混合 class（例如
+    field__item extra 或 wp-block-cover alignfull other-class）不会被错误排除。
     """
-    def _exact_single(t: Tag) -> bool:
+    def _class_signature(t: Tag) -> frozenset[str]:
         classes = t.get('class') or []
-        return len(classes) == 1 and classes[0] in TEXT_NOISE_CLASSES
+        return frozenset(str(c).strip().lower() for c in classes if str(c).strip())
 
-    if _exact_single(tag):
+    if _class_signature(tag) in NOISE_CLASSES:
         return True
 
     for parent in tag.parents:
         if not isinstance(parent, Tag):
             continue
-        if _exact_single(parent):
+        if _class_signature(parent) in NOISE_CLASSES:
             return True
     return False
 
@@ -373,10 +378,6 @@ def _is_text_noise(tag: Tag) -> bool:
 
     # 按钮内容不提取（如 "Doná ahora" 捐赠按钮）
     if _is_button_like(tag):
-        return True
-
-    # 跳过文本噪音 class 容器内的元素
-    if _is_text_noise_class(tag):
         return True
 
     # 跳过纯链接导航项：<li> 内只有 <a> 子元素且文本较短（如语言选择器、菜单项）
@@ -489,6 +490,12 @@ def _is_404_page(html: str) -> bool:
     if text in markers:
         _log(f'检测到 404/错误页 title 标记: {text}')
         return True
+        
+    text = _clean_text(soup.body.get_text(' ', strip=True)) if soup.body else ''
+    if text in markers:
+        _log(f'检测到 404/错误页 body 标记: {text}')
+        return True
+    
     return False
 
 
@@ -542,6 +549,28 @@ def _media_from_tag(tag: Tag, base_url: str):
         'note': note,
         'alt': alt,
     }
+
+
+def _has_primary_media_in_same_figure(tag: Tag) -> bool:
+    """在 figure 内部已经存在主视频时，忽略它的 figcaption/source 重复链接。"""
+    figure = tag.find_parent('figure')
+    if figure is None:
+        return False
+
+    for candidate in figure.find_all(['video', 'iframe', 'a']):
+        if candidate is tag:
+            continue
+        if candidate.name == 'video':
+            return True
+        if candidate.name == 'iframe':
+            src = candidate.get('src', '')
+            if src and (EMBED_RE.search(src) or VIDEO_FILE_RE.search(src)):
+                return True
+        if candidate.name == 'a':
+            href = candidate.get('href', '')
+            if href and VIDEO_FILE_RE.search(href):
+                return True
+    return False
 
 
 def _is_after_in_doc(tag_a: Tag, tag_b: Tag) -> bool:
@@ -646,6 +675,13 @@ def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
 
         # 跳过视觉隐藏元素（如 skip-link、screen-reader-only 内容）
         if _is_visually_hidden(tag):
+            continue
+
+        # 跳过噪音 class 容器内的元素
+        if _is_noise_class(tag):
+            continue
+    
+        if tag.name == 'a' and tag.find_parent('figcaption') and _has_primary_media_in_same_figure(tag):
             continue
 
         media = _media_from_tag(tag, base_url)

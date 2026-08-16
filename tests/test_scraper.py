@@ -262,6 +262,32 @@ def test_extract_content_blocks_keeps_related_section():
     assert 'Related article' in blocks
 
 
+def test_extract_content_blocks_skips_figcaption_duplicate_video_and_text():
+    html = '''
+    <html>
+      <body>
+        <main>
+          <h1>News</h1>
+          <figure class="wp-block-video">
+            <video height="720" width="1280" controls src="https://home.cern/wp-content/uploads/2026/04/CDS-OPEN-VIDEO-2022-334-001.mp4"></video>
+            <figcaption>
+              <span>(Video: CERN)</span>
+              <span class="cds-source-attribution">Source: <a href="https://videos.cern.ch/api/files/4dc026a6-95e7-45ae-a91a-65eb25d3a69c/720p.mp4" target="_blank">CERN (CDS)</a></span>
+            </figcaption>
+          </figure>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com')
+    videos = [b for b in blocks if isinstance(b, dict) and b['type'] == 'video']
+    texts = [b for b in blocks if isinstance(b, str)]
+    assert len(videos) == 1
+    assert 'Source:' not in ''.join(texts)
+    assert 'Video: CERN' not in ''.join(texts)
+
+
 def test_extract_content_blocks_not_blocked_by_body_navigation_class():
     html = '''
     <html>
@@ -452,6 +478,37 @@ def test_extract_content_blocks_skips_button_content():
     assert 'Real paragraph content.' in texts
     assert 'Another paragraph.' in texts
     assert not any('Doná ahora' in t for t in texts), '按钮文本不应被提取'
+
+
+def test_extract_content_blocks_only_excludes_exact_noise_class_matches():
+    """仅当 class 集合完全命中 TEXT_NOISE_CLASSES 时才跳过；混合 class 不应被误判。"""
+    html = '''
+    <html>
+      <body>
+        <main>
+          <div class="field__item">
+            <p>Noise text should be ignored.</p>
+          </div>
+          <div class="field__item extra">
+            <p>Real content should stay.</p>
+          </div>
+          <div class="wp-block-cover alignfull">
+            <p>Cover block text should be ignored.</p>
+          </div>
+          <div class="wp-block-cover alignfull other-class">
+            <p>Real cover content should stay.</p>
+          </div>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com')
+    texts = [b for b in blocks if isinstance(b, str)]
+    assert 'Noise text should be ignored.' not in texts
+    assert 'Cover block text should be ignored.' not in texts
+    assert 'Real content should stay.' in texts
+    assert 'Real cover content should stay.' in texts
 
 
 def test_extract_content_blocks_keeps_404_link_page_content():
