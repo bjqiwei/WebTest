@@ -13,6 +13,7 @@ from pathlib import Path
 
 # 确保能找到 src.scraper
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bs4 import BeautifulSoup
 from src.scraper import _find_challenge_marker
 
 NUM_THREADS = 10
@@ -45,7 +46,7 @@ def _process_files(file_batch, thread_id, dry_run):
                 print(f'[线程{thread_id}] 读取失败: {fp} ({e})')
             continue
 
-        marker = _find_challenge_marker(html)
+        marker = _find_challenge_marker(BeautifulSoup(html, 'html.parser'))
         if marker:
             with _lock:
                 print(f'[线程{thread_id}] 命中特征: {marker}, 文件: {fp}')

@@ -118,7 +118,7 @@ def test_is_404_page_uses_title_only():
       </body>
     </html>
     '''
-    assert scraper_module._is_404_page(html) is False
+    assert scraper_module._is_404_page(scraper_module.BeautifulSoup(html, 'html.parser')) is False
 
     html = '''
     <html>
@@ -126,7 +126,7 @@ def test_is_404_page_uses_title_only():
       <body><p>Some content</p></body>
     </html>
     '''
-    assert scraper_module._is_404_page(html) is True
+    assert scraper_module._is_404_page(scraper_module.BeautifulSoup(html, 'html.parser')) is True
 
 
 def test_is_same_domain_ignores_www_prefix():
@@ -781,13 +781,15 @@ def test_challenge_detector_requires_full_phrase_match():
 
 def test_challenge_detector_returns_matching_marker():
     html = '<html><title>Just a moment...</title><body>Checking your browser</body></html>'
-    assert scraper_module._find_challenge_marker(html) == 'Just a moment'
+    soup = scraper_module.BeautifulSoup(html, 'html.parser')
+    assert scraper_module._find_challenge_marker(soup) == 'Just a moment'
     assert scraper_module._is_challenge_or_block_page(html) is True
 
 
 def test_challenge_detector_is_case_sensitive_and_full_phrase_only():
     html = '<html><body>just a moment and checking your browser</body></html>'
-    assert scraper_module._find_challenge_marker(html) is None
+    soup = scraper_module.BeautifulSoup(html, 'html.parser')
+    assert scraper_module._find_challenge_marker(soup) is None
     assert scraper_module._is_challenge_or_block_page(html) is False
 
 

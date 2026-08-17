@@ -489,16 +489,15 @@ def _nearby_description(tag: Tag) -> str:
     return ''
 
 
-def _is_404_page(html: str) -> bool:
+def _is_404_page(soup: BeautifulSoup) -> bool:
     """判断页面是否为 404/错误页。
 
     仅检查 <title> 标签内容，忽略正文中可能出现的相同词语，避免把正常页面误判为 404。
     """
-    soup = BeautifulSoup(html, 'html.parser')
-    title = soup.title
-    if title is None:
+    if soup is None or soup.title is None:
         return False
 
+    title = soup.title
     text = _clean_text(title.get_text(' ', strip=True))
     if not text:
         return False
@@ -673,7 +672,7 @@ def _find_content_cutoff_index(candidates, soup, cutoff_markers):
     return None
 
 
-def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
+def extract_content_blocks(soup: BeautifulSoup, base_url: str, cutoff_markers=None):
     """从 HTML 中提取文本块、视频和图片。视频和图片各自拥有独立的序号。
 
     cutoff_markers: 若页面中出现这些标记，则标记之后的所有内容块都会被忽略。
@@ -681,8 +680,6 @@ def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
     """
     if cutoff_markers is None:
         cutoff_markers = CONTENT_CUTOFF_MARKERS
-
-    soup = BeautifulSoup(html, 'html.parser')
 
     root = soup.find('main') or soup.body or soup
 
@@ -765,22 +762,20 @@ def _is_html_document(html: str) -> bool:
     return ('<html' in sample) or ('<!doctype html' in sample)
 
 
-def _find_challenge_marker(html: str) -> str | None:
+def _find_challenge_marker(soup: BeautifulSoup) -> str | None:
     """Return the exact challenge marker string that matched, otherwise None.
 
     Matching is case-sensitive and uses the full phrase as written in
     CHALLENGE_MARKERS. This avoids false positives from sentences that merely
     contain similar words in different casing or as partial fragments.
     """
-    if not html:
+    if soup is None:
         return None
 
-    sample = re.sub(r'<[^>]+>', ' ', html, flags=re.I | re.S)
-    sample = unescape(sample)
-    sample = re.sub(r'[\u00a0\s]+', ' ', sample)
-    sample = sample.strip()
-    if not sample:
-        return None
+    sample = set()
+    # 自动去除空白和换行
+    for text in soup.stripped_strings:
+        sample.add(text)
 
     for marker in CHALLENGE_MARKERS:
         if marker in sample:
@@ -791,7 +786,8 @@ def _find_challenge_marker(html: str) -> str | None:
 
 def _is_challenge_or_block_page(html: str) -> bool:
     """Return True only when a real challenge marker appears as a whole phrase."""
-    return _find_challenge_marker(html) is not None
+    soup = BeautifulSoup(html, 'html.parser')
+    return _find_challenge_marker(soup) is not None
 
 
 def _try_click_challenge_checkbox(page) -> bool:
@@ -886,7 +882,8 @@ def fetch_html_with_playwright(
             return '', ctype
 
         if HTML_CONTENT_TYPE_RE.search(ctype) and _is_challenge_or_block_page(page.content()):
-            marker = _find_challenge_marker(page.content())
+            soup = BeautifulSoup(page.content(),'html.parser')
+            marker = _find_challenge_marker(soup)
             challenge_wait_seconds = max(10.0, wait_seconds)
             challenge_deadline = time.time() + challenge_wait_seconds
             _log(f'检测到挑战页 {marker}，额外最多等待{challenge_wait_seconds:.1f}秒: {url}')
@@ -1273,13 +1270,13 @@ def save_site_html(
                 _log(f'Processing cached URL: {cached_url}')
                 cached_html = cached_html_path.read_text(encoding='utf-8')
                 # 遇到links!=[]的并且是block/challenge页面的情况，并不会执行到这里，需要单独写个程序洗出 block/challenge页面的缓存
-                marker = _find_challenge_marker(cached_html)
+                soup = BeautifulSoup(cached_html, 'html.parser')
+                marker = _find_challenge_marker(soup)
                 if marker:
                     _log(f'Cached HTML is a challenge/block page: {cached_url} (标记: {marker})')
                     cached_html_path.unlink(missing_ok=True)
                     visited.remove(_remove_scheme(cached_url))
                     continue
-                soup = BeautifulSoup(cached_html, 'html.parser')
                 links = _extract_links(soup, cached_url, root_host)
                 dirty_links[cached_url] = links
             except Exception:
@@ -1437,7 +1434,8 @@ def save_site_html(
                     dirty_html.append({'url': current_url, 'html_path': None, 'content_type': content_type, 'title': None})
                     continue
 
-                marker = _find_challenge_marker(html)
+                soup = BeautifulSoup(html, 'html.parser')
+                marker = _find_challenge_marker(soup)
                 if marker:
                     _log(f'挑战或封锁页面: {current_url} (检测到标记: {marker})')
                     _append_failed(current_url, 'challenge_or_block', html)
@@ -1604,18 +1602,19 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
             src_html_path = Path(page['html_path'])
 
             html = src_html_path.read_text(encoding='utf-8')
-            marker = _find_challenge_marker(html)
+            soup = BeautifulSoup(html, 'html.parser')
+            marker = _find_challenge_marker(soup)
             if marker:  
                 _log(f'分析时检测到挑战或封锁页面: {current_url} (标记: {marker})')
                 return {'url': current_url, 'error': 'challenge_or_block', 'video_count': -4, 'image_count': -4}
 
             # 404/错误页：页面 <link> 元素 href 含 page-404/error-404 时，不提取该页面的
             # 视频、图片等内容（整个页面视为无效）。
-            if _is_404_page(html):
+            if _is_404_page(soup):
                 _log(f'检测到 404/错误页，跳过内容提取, url: {current_url}')
                 return {'url': current_url, 'error': '404_or_error_page', 'video_count': -5, 'image_count': -5}
 
-            blocks = extract_content_blocks(html, current_url)
+            blocks = extract_content_blocks(soup, current_url)
             video_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'video')
             image_count = sum(1 for b in blocks if isinstance(b, dict) and b.get('type') == 'image')
 
