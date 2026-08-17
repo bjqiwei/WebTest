@@ -394,6 +394,31 @@ def test_extract_content_blocks_keeps_cutoff_marker_block_but_discards_after_it(
     assert videos[0]['note'] == 'UNICEF Division of Human Resources'
 
 
+def test_extract_content_blocks_cutoff_matches_class_name_marker():
+    """截断标记既可命中文本，也可命中 class 名称，如 related-articles。"""
+    html = '''
+    <html>
+      <body>
+        <main>
+          <h1>Title</h1>
+          <p>Keep me.</p>
+          <div class="related-articles">
+            <h2>Related Articles</h2>
+            <p>Should be cut.</p>
+          </div>
+          <p>After marker content should be removed.</p>
+        </main>
+      </body>
+    </html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com', cutoff_markers=('Related Articles',))
+    texts = [b for b in blocks if isinstance(b, str)]
+    assert 'Title' in texts
+    assert 'Should be cut.' not in texts
+    assert 'After marker content should be removed.' not in texts
+
+
 def test_extract_content_blocks_cutoff_can_be_disabled():
     """传入 cutoff_markers=() 时关闭截断，标记之后的内容仍被保留。"""
     html = '''
@@ -758,6 +783,12 @@ def test_challenge_detector_returns_matching_marker():
     html = '<html><title>Just a moment...</title><body>Checking your browser</body></html>'
     assert scraper_module._find_challenge_marker(html) == 'Just a moment'
     assert scraper_module._is_challenge_or_block_page(html) is True
+
+
+def test_challenge_detector_is_case_sensitive_and_full_phrase_only():
+    html = '<html><body>just a moment and checking your browser</body></html>'
+    assert scraper_module._find_challenge_marker(html) is None
+    assert scraper_module._is_challenge_or_block_page(html) is False
 
 
 def test_fetch_html_playwright_mode(monkeypatch):

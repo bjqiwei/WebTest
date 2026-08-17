@@ -63,26 +63,40 @@ CHALLENGE_MARKERS = (
 CONTENT_CUTOFF_MARKERS = (
     # 页面中出现该标记后，其后的内容块全部忽略（例如视频版权/署名行等）
     'Related Articles',
+    'Read More',
 )
 
-NOISE_KEYWORDS = ('footer', 'cookie', 'consent', 'breadcrumb', 'share', 'language', 'lang-switcher')
+CUTOFF_CLASSES = (
+    frozenset({'related-articles'}),
+    frozenset({'read-more'}),
+)
 
-NOISE_PARENT_TAGS = {
-    'nav',
-    'header',
-    'footer',
-    'aside',
-    'noscript',
-}
-
-# 视觉隐藏元素的 class 关键字（如 skip-link、screen-reader-only）
-VISUALLY_HIDDEN_CLASSES = ('skip-link', 'visually-hidden', 'sr-only')
 
 # 文本噪音 class（仅当元素 class 集合与其中一个候选完全一致时排除）
 NOISE_CLASSES = (
     frozenset({'inner-container'}),
     frozenset({'field__item'}),
     frozenset({'wp-block-cover', 'alignfull'}),
+    frozenset({'sign-up-form'}),
+    frozenset({'c-full-width-photo-cta', 'c-feature-one-column-with-image'}),
+    frozenset({'c-featured-content__col', 'c-featured-content__media'}),
+    frozenset({'c-featured-content__col', 'c-featured-content__media'}),
+    frozenset({'footer'}),
+    frozenset({'cookie'}),
+    frozenset({'consent'}),
+    frozenset({'breadcrumb'}),
+    frozenset({'share'}),
+    frozenset({'language'}),
+    frozenset({'lang-switcher'}),
+    frozenset({'nav'}),
+    frozenset({'header'}),
+    frozenset({'footer'}),
+    frozenset({'aside'}),
+    frozenset({'noscript'}),
+    # 视觉隐藏元素的 class 关键字（如 skip-link、screen-reader-only）
+    frozenset({'skip-link'}),
+    frozenset({'visually-hidden'}),
+    frozenset({'sr-only'}),
 )
 
 
@@ -322,30 +336,33 @@ def _is_same_domain(url: str, root_host: str) -> bool:
 
 
 def _is_in_noise_area(tag: Tag) -> bool:
+    if tag.name == 'a' and tag.find_parent('figcaption') and _has_primary_media_in_same_figure(tag):
+        return True
+    # 跳过噪音 class 容器内的元素
+    if _is_match_class(tag, noise_classes=NOISE_CLASSES):
+        return True
+    
     for parent in tag.parents:
         if not isinstance(parent, Tag):
             continue
-        if parent.name in NOISE_PARENT_TAGS:
+        if _is_match_class(parent, noise_classes=NOISE_CLASSES):
             return True
-        if parent.get('aria-hidden') == 'true':
-            return True
-        classes = ' '.join(parent.get('class', [])).lower()
-        pid = (parent.get('id') or '').lower()
-        if any(k in classes for k in NOISE_KEYWORDS):
-            return True
-        if any(k in pid for k in NOISE_KEYWORDS):
-            return True
+
     return False
-def _is_visually_hidden(tag: Tag) -> bool:
-    """判断元素是否为视觉隐藏元素（如 skip-link、screen-reader-only 内容）。
 
-    这些元素对屏幕阅读器可见但对视觉用户不可见，不应提取为正文内容。
-    """
-    classes = ' '.join(tag.get('class', [])).lower()
-    return any(k in classes for k in VISUALLY_HIDDEN_CLASSES)
+def _is_in_cutoff_area(tag: Tag) -> bool:
+    if _is_match_class(tag, noise_classes=CUTOFF_CLASSES):
+        return True
 
+    for parent in tag.parents:
+        if not isinstance(parent, Tag):
+            continue
+        if _is_match_class(parent, noise_classes=CUTOFF_CLASSES):
+            return True
 
-def _is_noise_class(tag: Tag) -> bool:
+    return False
+
+def _is_match_class(tag: Tag, noise_classes: set[frozenset[str]]) -> bool:
     """仅当元素或其祖先的 class 集合与噪音候选完全一致时才跳过。
 
     这里要求精确匹配，而不是前缀/包含匹配，因此混合 class（例如
@@ -355,13 +372,13 @@ def _is_noise_class(tag: Tag) -> bool:
         classes = t.get('class') or []
         return frozenset(str(c).strip().lower() for c in classes if str(c).strip())
 
-    if _class_signature(tag) in NOISE_CLASSES:
+    if _class_signature(tag) in noise_classes:
         return True
 
     for parent in tag.parents:
         if not isinstance(parent, Tag):
             continue
-        if _class_signature(parent) in NOISE_CLASSES:
+        if _class_signature(parent) in noise_classes:
             return True
     return False
 
@@ -628,6 +645,24 @@ def _find_content_cutoff_index(candidates, soup, cutoff_markers):
             marker_el = node.parent
             break
     if marker_el is None:
+        for tag in soup.find_all(True):
+            if not isinstance(tag, Tag):
+                continue
+            if _is_in_noise_area(tag):
+                continue
+            if not _is_in_cutoff_area(tag):
+                continue
+            for idx, cand in enumerate(candidates):
+                if cand is tag:
+                    marker_el = cand
+                    break
+                if cand in tag.descendants:
+                    marker_el = cand
+                    break
+            if marker_el is not None:
+                break
+
+    if marker_el is None:
         return None
 
     for idx, tag in enumerate(candidates):
@@ -671,17 +706,6 @@ def extract_content_blocks(html: str, base_url: str, cutoff_markers=None):
 
     for tag in candidates:
         if not isinstance(tag, Tag) or _is_in_noise_area(tag):
-            continue
-
-        # 跳过视觉隐藏元素（如 skip-link、screen-reader-only 内容）
-        if _is_visually_hidden(tag):
-            continue
-
-        # 跳过噪音 class 容器内的元素
-        if _is_noise_class(tag):
-            continue
-    
-        if tag.name == 'a' and tag.find_parent('figcaption') and _has_primary_media_in_same_figure(tag):
             continue
 
         media = _media_from_tag(tag, base_url)
@@ -742,10 +766,11 @@ def _is_html_document(html: str) -> bool:
 
 
 def _find_challenge_marker(html: str) -> str | None:
-    """Return the exact marker string that matched, otherwise None.
+    """Return the exact challenge marker string that matched, otherwise None.
 
-    This is mainly for debugging and cleanup scripts: it shows which challenge
-    phrase actually triggered detection instead of only returning True/False.
+    Matching is case-sensitive and uses the full phrase as written in
+    CHALLENGE_MARKERS. This avoids false positives from sentences that merely
+    contain similar words in different casing or as partial fragments.
     """
     if not html:
         return None
@@ -758,13 +783,7 @@ def _find_challenge_marker(html: str) -> str | None:
         return None
 
     for marker in CHALLENGE_MARKERS:
-        normalized = re.sub(r'\s+', ' ', marker.strip())
-        if not normalized:
-            continue
-        # Only match plain text phrases. Do not match URL/path fragments like
-        # /cdn-cgi/challenge-platform/... which are embedded in JS strings.
-        phrase_pattern = r'(?<![A-Za-z0-9])' + r'\s+'.join(re.escape(part) for part in normalized.split()) + r'(?![A-Za-z0-9])'
-        if re.search(phrase_pattern, sample):
+        if marker in sample:
             return marker
 
     return None
