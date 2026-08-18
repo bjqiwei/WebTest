@@ -39,6 +39,10 @@ PAGE_404_MARKERS = (
     'Page non trouvée – Home | CERN',
     'Page not available – Home | CERN',
     'Page not found – Home | CERN',
+    'Sorry - Access denied (Error code 403)',
+    '400 Bad Request',
+    'HTTP Status 404 – Not Found',
+    '出错啦_中国大学MOOC(慕课)_中国大学MOOC(慕课)',
 )
 
 # 挑战页/封锁页检测关键字
@@ -56,8 +60,12 @@ CHALLENGE_MARKERS = (
     '安全服务防护恶意自动程序',
     'Too Many Requests',
     '503 Service Temporarily Unavailable',
-    #'500 Error Page',
-    #'Temporarily Unavailable',
+    '500 Error Page',
+    'Temporarily Unavailable',
+    '431 Request Header Fields Too Large',
+    '403 Forbidden',
+    '502 Bad Gateway',
+    'Arts and Science JS Challenge',
 )
 
 CONTENT_CUTOFF_MARKERS = (
