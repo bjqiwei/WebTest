@@ -678,14 +678,14 @@ def test_scrape_site_skip_parse_error_and_continue(tmp_path, monkeypatch):
 
     monkeypatch.setattr('src.scraper.fetch_html', lambda url, **kwargs: {'html': pages[url], 'content_type': 'text/html'})
 
-    original_save = scraper_module._save_page_output
+    original_save = scraper_module._save_html_snapshot
 
     def flaky_save(url, html, outdir, page_index, timestamp, **kwargs):
         if url.endswith('/bad.html'):
             raise ValueError('parse error')
         return original_save(url, html, outdir, page_index, timestamp, **kwargs)
 
-    monkeypatch.setattr('src.scraper._save_page_output', flaky_save)
+    monkeypatch.setattr('src.scraper._save_html_snapshot', flaky_save)
 
     result = scrape_site('https://www.example.com', tmp_path, max_depth=1, max_pages=10)
     assert result['page_count'] == 2  # /（无视频）和 good.html（有视频且成功）
@@ -707,7 +707,7 @@ def test_scrape_site_persists_failed_fetch_pages(tmp_path, monkeypatch):
     monkeypatch.setattr('src.scraper.fetch_html', fake_fetch)
 
     # save_site_html returns the save-step result which includes fetch failures
-    result = scraper_module.save_site_html('https://www.example.com', tmp_path, max_depth=1, max_pages=10)
+    result = scraper_module.scrape_site('https://www.example.com', tmp_path, max_depth=1, max_pages=10)
 
     assert result['failed_count'] == 1
     # 从 SQLite 查询失败页面记录
@@ -794,9 +794,27 @@ def test_challenge_detector_is_case_sensitive_and_full_phrase_only():
 
 
 def test_fetch_html_playwright_mode(monkeypatch):
-    monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: {'html': '<html>pw</html>', 'content_type': 'text/html'})
+    monkeypatch.setattr('src.scraper.fetch_html_with_playwright', lambda *args, **kwargs: {'html': '<html>pw</html>', 'content_type': 'text/html', 'final_url': 'https://example.com/final'})
     result = fetch_html('https://example.com', renderer='playwright')
     assert 'pw' in result['html']
+    assert result['final_url'] == 'https://example.com/final'
+
+
+def test_fetch_html_returns_final_url_after_redirect(monkeypatch):
+    class DummyResp:
+        url = 'https://example.com/final'
+        headers = {'content-type': 'text/html; charset=utf-8'}
+        encoding = 'utf-8'
+        apparent_encoding = 'utf-8'
+        text = '<html><body>redirected</body></html>'
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr('src.scraper.requests.get', lambda *args, **kwargs: DummyResp())
+    result = fetch_html('https://example.com/start', renderer='requests')
+    assert result['final_url'] == 'https://example.com/final'
+    assert result['html'] == '<html><body>redirected</body></html>'
 
 
 def test_fetch_html_playwright_aborted_pdf_returns_empty_html(monkeypatch):
@@ -920,6 +938,7 @@ def test_save_site_html_persists_title_in_pages_table(monkeypatch, tmp_path):
         return {
             'html': '<html><head><title>Example Title</title></head><body>ok</body></html>',
             'content_type': 'text/html',
+      'final_url': 'https://www.example.com/final',
         }
 
     monkeypatch.setattr('src.scraper.fetch_html', fake_fetch)
@@ -928,15 +947,16 @@ def test_save_site_html_persists_title_in_pages_table(monkeypatch, tmp_path):
     db_path = scraper_module._scrape_db_path('https://www.example.com', tmp_path)
     conn = sqlite3.connect(str(db_path))
     row = conn.execute(
-        "SELECT title FROM pages WHERE url = ?",
-        ('https://www.example.com',),
+      "SELECT title, final_url FROM pages WHERE url = ?",
+        ('https://www.example.com/final',),
     ).fetchone()
     conn.close()
     assert row is not None
     assert row[0] == 'Example Title'
+    assert row[1] == 'https://www.example.com/final'
 
 
-def test_load_html_cache_from_db_rehydrates_missing_title(tmp_path):
+def test_load_html_cache_from_db_preserves_final_url(tmp_path):
     import sqlite3
 
     html_path = tmp_path / 'page.html'
@@ -947,6 +967,7 @@ def test_load_html_cache_from_db_rehydrates_missing_title(tmp_path):
     conn.execute(
         "CREATE TABLE IF NOT EXISTS pages ("
         "  url TEXT PRIMARY KEY,"
+      "  final_url TEXT DEFAULT NULL,"
         "  html_path TEXT DEFAULT NULL,"
         "  content_type TEXT NOT NULL DEFAULT '',"
         "  title TEXT DEFAULT NULL,"
@@ -957,20 +978,16 @@ def test_load_html_cache_from_db_rehydrates_missing_title(tmp_path):
         ")"
     )
     conn.execute(
-        "INSERT OR REPLACE INTO pages (url, html_path, content_type, title, video_count, image_count) VALUES (?, ?, ?, ?, ?, ?)",
-        ('https://example.com', str(html_path), 'text/html', '', -1, -1),
+      "INSERT OR REPLACE INTO pages (url, final_url, html_path, content_type, title, video_count, image_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ('https://example.com', 'https://example.com/final', str(html_path), 'text/html', '', -1, -1),
     )
     conn.commit()
     conn.close()
 
     cache = scraper_module._load_html_cache_from_db('https://example.com', tmp_path)
 
-    assert cache[0]['title'] == 'Recovered Title'
-
-    conn = sqlite3.connect(str(db_path))
-    row = conn.execute("SELECT title FROM pages WHERE url = ?", ('https://example.com',)).fetchone()
-    conn.close()
-    assert row[0] == 'Recovered Title'
+    assert cache[0]['title'] == ''
+    assert cache[0]['final_url'] == 'https://example.com/final'
 
 
 def test_save_site_html_reuses_cached_local_html(monkeypatch, tmp_path):
@@ -1033,8 +1050,8 @@ def _seed_analyze_pages(tmp_path):
     video_file.write_text(video_html, encoding='utf-8')
     novideo_file.write_text(novideo_html, encoding='utf-8')
 
-    db_path = _scrape_db_path(start_url, tmp_path)
-    conn = _init_db(db_path)
+    db_path = scraper_module._scrape_db_path(start_url, tmp_path)
+    conn = scraper_module._init_db(db_path)
     conn.executemany(
         "INSERT OR REPLACE INTO pages (url, html_path, content_type, video_count, image_count)"
         " VALUES (?, ?, ?, -1, -1)",
@@ -1077,6 +1094,39 @@ def test_analyze_keeps_html_by_default(tmp_path):
     assert result['deleted_html_count'] == 0
     assert video_file.exists()
     assert novideo_file.exists(), '默认不应删除无视频页面的 HTML'
+
+
+def test_analyze_skips_duplicate_final_url(tmp_path):
+    import sqlite3
+
+    start_url = 'https://example.com'
+    html_a = tmp_path / 'page_a.html'
+    html_b = tmp_path / 'page_b.html'
+    html = '<html><body><main><video src="/intro.mp4"></video></main></body></html>'
+    html_a.write_text(html, encoding='utf-8')
+    html_b.write_text(html, encoding='utf-8')
+
+    db_path = scraper_module._scrape_db_path(start_url, tmp_path)
+    conn = scraper_module._init_db(db_path)
+    conn.executemany(
+        "INSERT OR REPLACE INTO pages (url, final_url, html_path, content_type, video_count, image_count)"
+        " VALUES (?, ?, ?, ?, -1, -1)",
+        [
+            ('https://example.com/a', 'https://example.com/final', str(html_a), 'text/html'),
+            ('https://example.com/b', 'https://example.com/final', str(html_b), 'text/html'),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    result = scraper_module.analyze_saved_html(start_url, tmp_path)
+
+    assert result['page_count'] == 1
+    conn = sqlite3.connect(str(db_path))
+    rows = dict(conn.execute("SELECT url, video_count FROM pages ORDER BY url"))
+    conn.close()
+    assert rows['https://example.com/a'] == 1
+    assert rows['https://example.com/b'] == -1
 
 
 def test_analyze_output_filename_does_not_duplicate_page_name(tmp_path):

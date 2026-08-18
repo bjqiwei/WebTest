@@ -681,6 +681,9 @@ def extract_content_blocks(soup: BeautifulSoup, base_url: str, cutoff_markers=No
     if cutoff_markers is None:
         cutoff_markers = CONTENT_CUTOFF_MARKERS
 
+    if isinstance(soup, str):
+        soup = BeautifulSoup(soup, 'html.parser')
+
     root = soup.find('main') or soup.body or soup
 
     tags = ['h1', 'h2', 'h3', 'h4', 'p', 'li', 'video', 'iframe', 'a', 'img']
@@ -689,7 +692,7 @@ def extract_content_blocks(soup: BeautifulSoup, base_url: str, cutoff_markers=No
     # 内容截断：找到截断点，丢弃标记（及其后的全部内容）。
     # _find_content_cutoff_index() 已返回合适的切片下标：标记本身是候选时返回其下标
     # （连标记一起排除），标记不是候选时返回其后第一个候选下标（如视频版权行场景保留视频）。
-    if cutoff_markers and any(m in html for m in cutoff_markers):
+    if cutoff_markers:
         cutoff_index = _find_content_cutoff_index(candidates, soup, cutoff_markers)
         if cutoff_index is not None:
             if cutoff_index > 0:
@@ -738,6 +741,9 @@ def extract_content_blocks(soup: BeautifulSoup, base_url: str, cutoff_markers=No
 
 
 def _extract_links(soup: BeautifulSoup, base_url: str, root_host: str):
+    if isinstance(soup, str):
+        soup = BeautifulSoup(soup, 'html.parser')
+
     links = []
     for a in soup.find_all('a', href=True):
         href = a.get('href', '').strip()
@@ -854,24 +860,25 @@ def fetch_html_with_playwright(
     body_deadline = time.time() + max(float(wait_seconds), 10.0)
 
     def _navigate_and_capture(page, url, body_deadline, wait_seconds):
-        """在已打开的 page 上导航并捕获 HTML。返回 (html, content_type)。"""
+        """在已打开的 page 上导航并捕获 HTML。返回 (html, content_type, final_url)。"""
         _log(f'开始打开页面: {url}')
         page.route("**/google-analytics.com/**", lambda route: route.abort())
         try:
             response = page.goto(url, wait_until='domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
+            final_url = response.url if response is not None else page.url
             ctype = response.headers.get('content-type', '') if response is not None else ''
         except Exception as goto_err:
             err_msg = str(goto_err)
-            if 'net::ERR_HTTP_RESPONSE_CODE_FAILURE' in err_msg:
-                _log(f'HTTP 响应错误，使用 page.request.get 重新获取: {url}, 错误: {goto_err}')
+            if 'net::ERR_HTTP_RESPONSE_CODE_FAILURE' in err_msg or 'net::ERR_ABORTED' in err_msg:
+                _log(f'HTTP 响应/中止错误，使用 page.request.get 重新获取: {url}, 错误: {goto_err}')
                 api_resp = page.request.get(url)
+                ctype = api_resp.headers.get('content-type', '')
+                final_url = getattr(api_resp, 'url', url)
+                if not HTML_CONTENT_TYPE_RE.search(ctype):
+                    return '', ctype, final_url
                 body_bytes = api_resp.body()
                 html_text = body_bytes.decode('utf-8', errors='replace')
-                ctype = api_resp.headers.get('content-type', '')
-                return html_text, ctype
-            if 'net::ERR_ABORTED' in err_msg:
-                _log(f'错误: {goto_err}')
-                return '', 'net::ERR_ABORTED'
+                return html_text, ctype, final_url
             raise
 
         try:
@@ -879,7 +886,7 @@ def fetch_html_with_playwright(
             page.wait_for_load_state('domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
         except TimeoutError:
             _log(f'等待 DOM 加载超时: {url}')
-            return '', ctype
+            return '', ctype, page.url
 
         if HTML_CONTENT_TYPE_RE.search(ctype) and _is_challenge_or_block_page(page.content()):
             soup = BeautifulSoup(page.content(),'html.parser')
@@ -895,7 +902,7 @@ def fetch_html_with_playwright(
                     break
         page.wait_for_timeout(1000)
 
-        return page.content(), ctype
+        return page.content(), ctype, page.url
 
     use_cdp = bool(cdp_url)
 
@@ -914,8 +921,9 @@ def fetch_html_with_playwright(
     page = context.new_page()
     html = ''
     content_type = ''
+    final_url = url
     try:
-        html, content_type = _navigate_and_capture(page, url, body_deadline, wait_seconds)
+        html, content_type, final_url = _navigate_and_capture(page, url, body_deadline, wait_seconds)
         _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
     except Exception as e:
         _log(f'抓取页面异常: {url}, 错误: {e}')
@@ -927,7 +935,7 @@ def fetch_html_with_playwright(
             context.close()
             #_log(f'浏览器已关闭: {url}')
 
-    return {'html': html, 'content_type': content_type}
+    return {'html': html, 'content_type': content_type, 'final_url': final_url}
 
 
 def fetch_html(
@@ -937,7 +945,7 @@ def fetch_html(
     playwright_wait_seconds: float = 5.0,
     playwright_cdp_url: str = '',
 ) -> dict:
-    """返回 {'html': str, 'content_type': str}"""
+    """返回 {'html': str, 'content_type': str, 'final_url': str}"""
     headers = {
         'User-Agent': DEFAULT_USER_AGENT
     }
@@ -954,6 +962,7 @@ def fetch_html(
         r = requests.get(url, headers=headers, timeout=playwright_wait_seconds)
         r.raise_for_status()
         ctype = r.headers.get('content-type', '')
+        final_url = getattr(r, 'url', url)
         # Many sites return missing/incorrect charset headers. Prefer apparent encoding
         # so Unicode punctuation like em dash is preserved in saved JSON.
         if not r.encoding or r.encoding.lower() in ('iso-8859-1', 'latin1'):
@@ -979,7 +988,7 @@ def fetch_html(
         )
         return result
 
-    return {'html': html, 'content_type': ctype}
+    return {'html': html, 'content_type': ctype, 'final_url': final_url}
 
 
 def _extract_html_title(soup: BeautifulSoup) -> str:
@@ -1037,6 +1046,7 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
     conn.execute(
         "CREATE TABLE IF NOT EXISTS pages ("
         "  url TEXT PRIMARY KEY,"
+        "  final_url TEXT DEFAULT NULL,"
         "  html_path TEXT DEFAULT NULL,"
         "  content_type TEXT NOT NULL DEFAULT '',"
         "  title TEXT DEFAULT NULL,"
@@ -1063,9 +1073,9 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         pass
 
     # 为已有 pages 表补充新增字段
-    for col in ('video_count', 'image_count', 'links', 'title'):
+    for col in ('final_url', 'video_count', 'image_count', 'links', 'title'):
         try:
-            if col == 'links' or col == 'title':
+            if col in ('final_url', 'links', 'title'):
                 conn.execute(f"ALTER TABLE pages ADD COLUMN {col} TEXT DEFAULT NULL")
             else:
                 conn.execute(f"ALTER TABLE pages ADD COLUMN {col} INTEGER NOT NULL DEFAULT -1")
@@ -1083,15 +1093,15 @@ def _load_html_cache_from_db(start_url: str, outdir: Path) -> list:
     try:
         conn = sqlite3.connect(str(db_path))
         conn.execute("PRAGMA journal_mode=WAL")
-        cursor = conn.execute("SELECT url, html_path, content_type, video_count, title FROM pages")
+        cursor = conn.execute("SELECT url, final_url, html_path, content_type, video_count, title FROM pages")
         cache = []
-        for url, html_path, content_type, video_count, title in cursor:
+        for url, final_url, html_path, content_type, video_count, title in cursor:
             if html_path:
                 p = Path(html_path)
                 if not p.is_absolute():
                     p = outdir / p
                 html_path = str(p)
-            cache.append({'url': url, 'html_path': html_path, 'content_type': content_type, 'video_count': video_count, 'title': title})
+            cache.append({'url': url, 'final_url': final_url, 'html_path': html_path, 'content_type': content_type, 'video_count': video_count, 'title': title})
         conn.close()
         return cache
     except Exception:
@@ -1103,10 +1113,10 @@ def _flush_html_batch(conn: sqlite3.Connection, entries: list):
     if not entries:
         return
     try:
-        rows = [(e['url'], e['html_path'], e.get('content_type'), e.get('title')) for e in entries]
+        rows = [(e['url'], e.get('final_url'), e['html_path'], e.get('content_type'), e.get('title')) for e in entries]
         conn.executemany(
-            "INSERT OR REPLACE INTO pages (url, html_path, content_type, title, video_count, image_count)"
-            " VALUES (?, ?, ?, ?, -1, -1)", rows
+            "INSERT OR REPLACE INTO pages (url, final_url, html_path, content_type, title, video_count, image_count)"
+            " VALUES (?, ?, ?, ?, ?, -1, -1)", rows
         )
         conn.commit()
     except Exception as e:
@@ -1322,6 +1332,7 @@ def save_site_html(
 
     def _fetch_one(page_url):
         try:
+            final_url = page_url
             fetch_result = fetch_html(
                 page_url,
                 renderer=renderer,
@@ -1331,13 +1342,14 @@ def save_site_html(
             )
             html_text = fetch_result['html']
             content_type = fetch_result.get('content_type', '')
+            final_url = fetch_result.get('final_url')
             # 在线程内提取链接，避免主线程串行解析
             links = None
             title = None
             if HTML_CONTENT_TYPE_RE.search(content_type):
                 soup = BeautifulSoup(html_text, 'html.parser')
                 try:
-                    links = _extract_links(soup, page_url, root_host)
+                    links = _extract_links(soup, final_url, root_host)
                 except Exception:
                     links = None
                 try:
@@ -1347,6 +1359,7 @@ def save_site_html(
 
             return {
                 'url': page_url,
+                'final_url': final_url,
                 'html': html_text,
                 'html_path': None,
                 'error': '',
@@ -1357,6 +1370,7 @@ def save_site_html(
         except Exception as exc:
             return {
                 'url': page_url,
+                'final_url': final_url,
                 'html': '',
                 'html_path': None,
                 'error': str(exc),
@@ -1422,6 +1436,7 @@ def save_site_html(
                 html = item.get('html', '')
                 fetch_error = item.get('error', '')
                 content_type = item.get('content_type', '')
+                final_url = item.get('final_url')
 
                 if fetch_error or not content_type:
                     _log(f'抓取页面失败: {current_url}, 错误: {fetch_error}')
@@ -1430,8 +1445,8 @@ def save_site_html(
 
                 if not HTML_CONTENT_TYPE_RE.search(content_type):
                     _log(f'非 HTML 内容类型: {current_url}, content_type={content_type}')
-                    html_cache.append({'url': current_url, 'html_path': None, 'content_type': content_type, 'title': None})
-                    dirty_html.append({'url': current_url, 'html_path': None, 'content_type': content_type, 'title': None})
+                    html_cache.append({'url': current_url, 'final_url': final_url, 'html_path': None, 'content_type': content_type, 'title': None})
+                    dirty_html.append({'url': current_url, 'final_url': final_url, 'html_path': None, 'content_type': content_type, 'title': None})
                     continue
 
                 soup = BeautifulSoup(html, 'html.parser')
@@ -1461,8 +1476,8 @@ def save_site_html(
                     continue
 
                 title =item.get('title', None)
-                html_cache.append({'url': current_url,'html_path': html_path,'content_type': content_type,'title': title})
-                dirty_html.append({'url': current_url,'html_path': html_path,'content_type': content_type,'title': title})
+                html_cache.append({'url': current_url,'final_url': final_url,'html_path': html_path,'content_type': content_type,'title': title})
+                dirty_html.append({'url': current_url,'final_url': final_url,'html_path': html_path,'content_type': content_type,'title': title})
 
                 links = item.get('links', None)
                 if HTML_CONTENT_TYPE_RE.search(content_type) and links is not None:
@@ -1525,16 +1540,16 @@ def _load_unanalyzed_pages_from_db(start_url: str, outdir: Path) -> list:
         conn = sqlite3.connect(str(db_path))
         conn.execute("PRAGMA journal_mode=WAL")
         cursor = conn.execute(
-            "SELECT url, html_path, content_type FROM pages WHERE video_count = -1 OR video_count > 0"
+            "SELECT url, final_url, html_path, content_type FROM pages WHERE video_count = -1 OR video_count > 0"
         )
         pages = []
-        for url, html_path, content_type in cursor:
+        for url, final_url, html_path, content_type in cursor:
             if html_path:
                 p = Path(html_path)
                 if not p.is_absolute():
                     p = outdir / p
                 html_path = str(p)
-            pages.append({'url': url, 'html_path': html_path, 'content_type': content_type})
+            pages.append({'url': url, 'final_url': final_url, 'html_path': html_path, 'content_type': content_type})
         conn.close()
         return pages
     except Exception:
@@ -1548,6 +1563,17 @@ def analyze_saved_html(start_url: str, outdir: Path, progress_callback=None, pha
     但 SQLite 中的记录保留（video_count 写为 0，不会重复分析）。
     """
     pages = _load_unanalyzed_pages_from_db(start_url, outdir)
+    deduped_pages = []
+    analyzed_final_urls = set()
+    for page in pages:
+        final_url = page.get('final_url') or page['url']
+        final_key = _remove_scheme(final_url)
+        if final_key in analyzed_final_urls:
+            _log(f'跳过 final_url 已分析页面: {page["url"]} -> {final_url}')
+            continue
+        analyzed_final_urls.add(final_key)
+        deduped_pages.append(page)
+    pages = deduped_pages
     _log(f'Loaded {len(pages)} unanalyzed pages from SQLite.')
     return _analyze_pages_from_cache(
         pages, outdir,
