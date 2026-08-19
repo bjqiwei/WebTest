@@ -873,7 +873,7 @@ def fetch_html_with_playwright(
         page.route("**/google-analytics.com/**", lambda route: route.abort())
         try:
             response = page.goto(url, wait_until='domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
-            final_url = response.url if response is not None else page.url
+            final_url = _normalize_url(response.url) if response is not None else page.url
             ctype = response.headers.get('content-type', '') if response is not None else ''
         except Exception as goto_err:
             err_msg = str(goto_err)
@@ -1587,7 +1587,7 @@ def analyze_saved_html(start_url: str, outdir: Path, progress_callback=None, pha
     analyzed_final_urls = set()
     for page in pages:
         final_url = page.get('final_url') or page['url']
-        final_key = _remove_scheme(final_url)
+        final_key = _remove_scheme(_normalize_url(final_url))
         if final_key in analyzed_final_urls:
             _log(f'跳过 final_url 已分析页面: {page["url"]} -> {final_url}')
             continue
