@@ -1233,8 +1233,9 @@ def save_site_html(
     failed_pages: list = _load_failed_pages_from_db(start_url, outdir)
     failed_urls: set = {_remove_scheme(p['url']) for p in failed_pages}
     _log(f'Loaded {len(failed_urls)} failed pages from SQLite.')
-    html_cache = _load_html_cache_from_db(start_url, outdir)
-    _log(f'Loaded {len(html_cache)} cached pages from SQLite.')
+    initial_html_cache = _load_html_cache_from_db(start_url, outdir)
+    saved_count = len(initial_html_cache)
+    _log(f'Loaded {saved_count} cached pages from SQLite.')
     links_cache = _load_links_cache_from_db(start_url, outdir)
     _log(f'Loaded {len(links_cache)} cached links from SQLite.')
     conn = _init_db(_scrape_db_path(start_url, outdir))  # 单个持久连接
@@ -1245,7 +1246,7 @@ def save_site_html(
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
 
     # 从本地缓存恢复：优先使用 links_cache 避免重新解析 HTML
-    for cached in html_cache:
+    for cached in initial_html_cache:
         cached_url = cached['url']
         # 只读取 content_type 为 html 的文件来提取链接
         ctype = cached.get('content_type', '')
@@ -1309,6 +1310,10 @@ def save_site_html(
                 queue.append(link)
                 queued.add(_remove_scheme(link))
 
+    # 启动抓取后不再持有全量缓存列表，避免随抓取过程持续占用内存
+    initial_html_cache.clear()
+    del initial_html_cache
+
     # 如果 start_url 不在缓存中，加入队列
     if _remove_scheme(start_url) not in visited and _remove_scheme(start_url) not in failed_urls and _remove_scheme(start_url) not in queued:
         queue.appendleft(start_url)
@@ -1341,6 +1346,8 @@ def save_site_html(
     def _fetch_one(page_url):
         try:
             final_url = page_url
+            soup = None
+            challenge_marker = None
             fetch_result = fetch_html(
                 page_url,
                 renderer=renderer,
@@ -1356,6 +1363,7 @@ def save_site_html(
             title = None
             if HTML_CONTENT_TYPE_RE.search(content_type):
                 soup = BeautifulSoup(html_text, 'html.parser')
+                challenge_marker = _find_challenge_marker(soup)
                 try:
                     links = _extract_links(soup, final_url, root_host)
                 except Exception:
@@ -1364,7 +1372,7 @@ def save_site_html(
                     title = _extract_html_title(soup)
                 except Exception:
                     title = None
-
+                del soup
             return {
                 'url': page_url,
                 'final_url': final_url,
@@ -1374,6 +1382,7 @@ def save_site_html(
                 'content_type': content_type,
                 'links': links,
                 'title': title,
+                'challenge_marker': challenge_marker,
             }
         except Exception as exc:
             return {
@@ -1385,6 +1394,7 @@ def save_site_html(
                 'content_type': '',
                 'links': None,
                 'title': None,
+                'challenge_marker': None,
             }
 
     if callable(phase_callback):
@@ -1395,7 +1405,7 @@ def save_site_html(
     def _try_submit():
         """从队列取一个 URL 提交到线程池，返回是否成功提交。"""
         while queue:
-            if not unlimited_pages and len(html_cache) >= max_pages:
+            if not unlimited_pages and saved_count >= max_pages:
                 return False
             current_url = queue.popleft()
             queued.discard(_remove_scheme(current_url))
@@ -1436,6 +1446,7 @@ def save_site_html(
             for future in done:
                 current_url = pending.pop(future)
                 item = future.result()
+                del future
 
                 if not item:
                     _log(f'未获取到页面: {current_url}')
@@ -1445,6 +1456,7 @@ def save_site_html(
                 fetch_error = item.get('error', '')
                 content_type = item.get('content_type', '')
                 final_url = item.get('final_url')
+                marker = item.get('challenge_marker')
 
                 if fetch_error or not content_type:
                     _log(f'抓取页面失败: {current_url}, 错误: {fetch_error}')
@@ -1453,12 +1465,10 @@ def save_site_html(
 
                 if not HTML_CONTENT_TYPE_RE.search(content_type):
                     _log(f'非 HTML 内容类型: {current_url}, content_type={content_type}')
-                    html_cache.append({'url': current_url, 'final_url': final_url, 'html_path': None, 'content_type': content_type, 'title': None})
                     dirty_html.append({'url': current_url, 'final_url': final_url, 'html_path': None, 'content_type': content_type, 'title': None})
+                    saved_count += 1
                     continue
 
-                soup = BeautifulSoup(html, 'html.parser')
-                marker = _find_challenge_marker(soup)
                 if marker:
                     _log(f'挑战或封锁页面: {current_url} (检测到标记: {marker})')
                     _append_failed(current_url, 'challenge_or_block', html)
@@ -1469,7 +1479,7 @@ def save_site_html(
                     _append_failed(current_url, 'not_html_document', html)
                     continue
 
-                page_index = len(html_cache) + 1
+                page_index = saved_count + 1
                 _log(f"正在保存 HTML文件: {current_url}")
                 try:
                     html_path = _save_html_snapshot(
@@ -1484,8 +1494,8 @@ def save_site_html(
                     continue
 
                 title =item.get('title', None)
-                html_cache.append({'url': current_url,'final_url': final_url,'html_path': html_path,'content_type': content_type,'title': title})
                 dirty_html.append({'url': current_url,'final_url': final_url,'html_path': html_path,'content_type': content_type,'title': title})
+                saved_count += 1
 
                 links = item.get('links', None)
                 if HTML_CONTENT_TYPE_RE.search(content_type) and links is not None:
@@ -1499,6 +1509,8 @@ def save_site_html(
                                 continue
                             queue.append(link)
                             queued.add(_remove_scheme(link))
+                del html
+                del item
 
             _flush_dirty()
             # 此线程完成，有空闲槽位，立即提交新任务
@@ -1533,7 +1545,7 @@ def save_site_html(
 
     result = {
         'start_url': start_url,
-        'saved_count': len(html_cache),
+        'saved_count': saved_count,
     }
     result['failed_count'] = len(failed_urls)
     return result
