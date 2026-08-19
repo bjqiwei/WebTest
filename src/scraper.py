@@ -1555,9 +1555,10 @@ def _load_unanalyzed_pages_from_db(start_url: str, outdir: Path) -> list:
     """从 SQLite 加载 video_count = -1 或 video_count > 0 的页面（未分析或已有结果需刷新）。"""
     db_path = _scrape_db_path(start_url, outdir)
     if not db_path.exists():
+        _log(f'未找到分析数据库: {db_path}')
         return []
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(str(db_path), timeout=30)
         conn.execute("PRAGMA journal_mode=WAL")
         cursor = conn.execute(
             "SELECT url, final_url, html_path, content_type FROM pages WHERE video_count = -1 OR video_count > 0"
@@ -1572,7 +1573,8 @@ def _load_unanalyzed_pages_from_db(start_url: str, outdir: Path) -> list:
             pages.append({'url': url, 'final_url': final_url, 'html_path': html_path, 'content_type': content_type})
         conn.close()
         return pages
-    except Exception:
+    except Exception as e:
+        _log(f'加载未分析页面失败: db={db_path}, 错误: {e}')
         return []
 
 
