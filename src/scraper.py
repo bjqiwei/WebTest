@@ -129,7 +129,7 @@ _log_path: Path | None = None
 _thread_local = threading.local()
 # 每个线程的页面计数，用于定期重启浏览器释放累积内存
 _thread_page_count: dict[int, int] = {}
-BROWSER_RESTART_EVERY_N_PAGES = 30
+BROWSER_RESTART_EVERY_N_PAGES = 50
 
 
 def _get_thread_browser(cdp_url: str = '', headless: bool = True):
@@ -176,6 +176,12 @@ def _get_thread_context(cdp_url: str = '', headless: bool = True):
     return _thread_local.context
 
 
+def _cleanup_thread_context():
+    """释放当前线程缓存的 browser context 引用。"""
+    if hasattr(_thread_local, 'context') and _thread_local.context is not None:
+        _thread_local.context = None
+
+
 def _cleanup_thread_browser():
     """释放当前线程的 Playwright browser 资源，回收内存。"""
     if hasattr(_thread_local, 'browser') and _thread_local.browser is not None:
@@ -184,8 +190,7 @@ def _cleanup_thread_browser():
         except Exception:
             pass
         _thread_local.browser = None
-    if hasattr(_thread_local, 'context') and _thread_local.context is not None:
-        _thread_local.context = None
+    _cleanup_thread_context()
     if hasattr(_thread_local, 'playwright') and _thread_local.playwright is not None:
         try:
             _thread_local.playwright.stop()
@@ -232,8 +237,6 @@ def is_file_url(url):
     # 2. 检查常见文件路径模式
     file_patterns = [
         r'/media/\d+/file$',           # UNICEF 风格: /media/7606/file
-        r'/assets/.*\.',
-        r'/static/.*\.',
     ]
     for pattern in file_patterns:
         if re.search(pattern, path, re.IGNORECASE):
@@ -915,13 +918,13 @@ def fetch_html_with_playwright(
     use_cdp = bool(cdp_url)
 
     # 非 CDP 模式下，定期重启浏览器以释放累积的内存（缓存、JS 堆等）
-    if not use_cdp:
-        tid = threading.current_thread().native_id
-        count = _thread_page_count.get(tid, 0) + 1
-        _thread_page_count[tid] = count
-        if count % BROWSER_RESTART_EVERY_N_PAGES == 0:
-            _log(f'线程累计抓取 {count} 页，重启浏览器释放内存')
-            _cleanup_thread_browser()
+
+    tid = threading.current_thread().native_id
+    count = _thread_page_count.get(tid, 0) + 1
+    _thread_page_count[tid] = count
+    if count % BROWSER_RESTART_EVERY_N_PAGES == 0:
+        _log(f'线程累计抓取 {count} 页，重启浏览器释放内存')
+        _cleanup_thread_context()
 
     # CDP：复用 thread-local browser + context，只开/关 tab
     browser = _get_thread_browser(cdp_url, headless)
@@ -1246,13 +1249,14 @@ def save_site_html(
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
 
     # 从本地缓存恢复：优先使用 links_cache 避免重新解析 HTML
+    _log(f'Processing {len(initial_html_cache)} cached pages to extract links...')
     for cached in initial_html_cache:
         cached_url = cached['url']
         # 只读取 content_type 为 html 的文件来提取链接
         ctype = cached.get('content_type', '')
         if not HTML_CONTENT_TYPE_RE.search(ctype):
             visited.add(_remove_scheme(cached_url))
-            _log(f'跳过非 HTML 缓存 URL: {cached_url} (content_type={ctype})')
+            #_log(f'跳过非 HTML 缓存 URL: {cached_url} (content_type={ctype})')
             continue
         # 已分析为无视频的页面（video_count=0）：本地 HTML 可能已被删除，无需再下载
         if cached.get('video_count', -1) == 0:
