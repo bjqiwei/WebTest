@@ -891,7 +891,7 @@ def fetch_html_with_playwright(
 
         try:
             #_log(f'等待 DOM 加载完成: {url} 超时时间: {max(10.0, body_deadline - time.time()):.1f}秒')
-            page.wait_for_load_state('domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
+            page.wait_for_load_state('load', timeout=max(10.0, body_deadline - time.time()) * 1000)
         except TimeoutError:
             _log(f'等待 DOM 加载超时: {url}')
             return '', ctype, page.url
@@ -908,7 +908,7 @@ def fetch_html_with_playwright(
                 page.wait_for_timeout(1000)
                 if not _is_challenge_or_block_page(page.content()):
                     break
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(1000)
 
         return page.content(), ctype, final_url
 
@@ -1230,6 +1230,8 @@ def save_site_html(
     visited = set()
     queued = set()
     queue = deque()
+    conn = _init_db(_scrape_db_path(start_url, outdir))  # 单个持久连接
+    _log(f'Initialized SQLite database at {_scrape_db_path(start_url, outdir)}.')
     failed_pages: list = _load_failed_pages_from_db(start_url, outdir)
     failed_urls: set = {_remove_scheme(p['url']) for p in failed_pages}
     _log(f'Loaded {len(failed_urls)} failed pages from SQLite.')
@@ -1238,8 +1240,6 @@ def save_site_html(
     _log(f'Loaded {saved_count} cached pages from SQLite.')
     links_cache = _load_links_cache_from_db(start_url, outdir)
     _log(f'Loaded {len(links_cache)} cached links from SQLite.')
-    conn = _init_db(_scrape_db_path(start_url, outdir))  # 单个持久连接
-    _log(f'Initialized SQLite database at {_scrape_db_path(start_url, outdir)}.')
     dirty_html: list = []  # 自上次 flush 后新增的页面记录
     dirty_links: dict = {}  # 记录自上次 flush 后变更的 url -> links
     dirty_failed: list = []  # 自上次 flush 后新增的失败页面记录
