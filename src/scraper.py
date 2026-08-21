@@ -70,13 +70,13 @@ CHALLENGE_MARKERS = (
 
 CONTENT_CUTOFF_MARKERS = (
     # 页面中出现该标记后，其后的内容块全部忽略（例如视频版权/署名行等）
-    'Related Articles',
-    'Read More',
 )
 
 CUTOFF_CLASSES = (
     frozenset({'related-articles'}),
     frozenset({'read-more'}),
+    frozenset({'sec-block-cntr-related'}),
+    frozenset({'related-topics'}),
 )
 
 
@@ -105,6 +105,7 @@ NOISE_CLASSES = (
     frozenset({'skip-link'}),
     frozenset({'visually-hidden'}),
     frozenset({'sr-only'}),
+    frozenset({'get-publication', 'grey-lightest-bg'}),
 )
 
 
@@ -129,7 +130,7 @@ _log_path: Path | None = None
 _thread_local = threading.local()
 # 每个线程的页面计数，用于定期重启浏览器释放累积内存
 _thread_page_count: dict[int, int] = {}
-BROWSER_RESTART_EVERY_N_PAGES = 50
+BROWSER_RESTART_EVERY_N_PAGES = 100
 
 
 def _get_thread_browser(cdp_url: str = '', headless: bool = True):
@@ -703,11 +704,9 @@ def extract_content_blocks(soup: BeautifulSoup, base_url: str, cutoff_markers=No
     # 内容截断：找到截断点，丢弃标记（及其后的全部内容）。
     # _find_content_cutoff_index() 已返回合适的切片下标：标记本身是候选时返回其下标
     # （连标记一起排除），标记不是候选时返回其后第一个候选下标（如视频版权行场景保留视频）。
-    if cutoff_markers:
+    if cutoff_markers or CUTOFF_CLASSES:
         cutoff_index = _find_content_cutoff_index(candidates, soup, cutoff_markers)
         if cutoff_index is not None:
-            if cutoff_index > 0:
-                cutoff_index -= 1
             candidates = candidates[:cutoff_index]
 
     blocks = []
@@ -1588,6 +1587,7 @@ def analyze_saved_html(start_url: str, outdir: Path, progress_callback=None, pha
     delete_html_no_video: 为 True 时，分析完成后删除不含视频页面的本地 HTML 文件，
     但 SQLite 中的记录保留（video_count 写为 0，不会重复分析）。
     """
+    set_log_file(outdir / 'analyze.log')
     pages = _load_unanalyzed_pages_from_db(start_url, outdir)
     deduped_pages = []
     analyzed_final_urls = set()
@@ -1685,6 +1685,7 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
             return {'url': current_url, 'error': str(e), 'video_count': -6, 'image_count': -6}
 
     max_workers = min(8, len(raw_pages) or 1)
+    _log(f'分析阶段使用线程池，最大并发数: {max_workers}')
     executor = ThreadPoolExecutor(max_workers=max_workers)
     try:
         # 使用滑动窗口方式提交，只保留有限数量的 future，避免全部 HTML 同时驻留内存
