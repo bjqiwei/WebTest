@@ -67,17 +67,37 @@ python scrape.py scrape https://www.bosch.com/careers -o output --all
 **使用 Playwright 渲染 + CDP 连接现有 Chrome（适合复杂页面）：**
 
 ```bash
-python scrape.py save https://www.unicef.org -o d:\web\unicef --all --renderer playwright --wait-seconds 90 --cdp-url http://127.0.0.1:9222 --concurrency 1
+python scrape.py save https://www.unicef.org -o d:\web\unicef --all --renderer playwright --wait-seconds 60 --cdp-url http://127.0.0.1:9222 --concurrency 1
+python scrape.py analyze https://www.unicef.org  -o d:\web\unicef
 ```
-python scrape.py save https://www.unfpa.org -o d:\web\unfpa --all --renderer playwright --wait-seconds 30 --cdp-url http://127.0.0.1:9222 --concurrency 1
+python scrape.py save https://www.panthera.org  -o d:\web\panthera --all --renderer playwright --wait-seconds 60 --cdp-url http://127.0.0.1:9222 --concurrency 1
 
-python scrape.py save https://www.nature.org -o d:\web\nature --all --renderer playwright --wait-seconds 30 --cdp-url http://127.0.0.1:9222 --concurrency 1
+python scrape.py save https://www.unfpa.org -o d:\web\unfpa --all --renderer playwright --wait-seconds 60 --cdp-url http://127.0.0.1:9222 --concurrency 1
+python scrape.py analyze https://www.unfpa.org  -o d:\web\unfpa
 
-python scrape.py save https://www.panthera.org  -o d:\web\panthera --all --renderer playwright --wait-seconds 30 --cdp-url http://127.0.0.1:9222 --concurrency 1
+python scrape.py save https://www.nature.org -o d:\web\nature --all --renderer playwright --wait-seconds 60 --cdp-url http://127.0.0.1:9222 --concurrency 1
 
-python scrape.py save https://www.home.cern  -o d:\web\home --all --renderer playwright --wait-seconds 30 --cdp-url http://127.0.0.1:9222 --concurrency 1
+python scrape.py analyze https://www.nature.org  -o d:\web\nature
 
-python scrape.py save https://www.ifad.org -o d:\web\ifad --all --renderer playwright --wait-seconds 30 --cdp-url http://127.0.0.1:9222 --concurrency 1
+python scrape.py save https://www.home.cern  -o d:\web\home --all --renderer playwright --wait-seconds 60 --cdp-url http://127.0.0.1:9222 --concurrency 1
+
+python scrape.py analyze https://www.home.cern  -o d:\web\home 
+
+python scrape.py save https://www.ifad.org -o d:\web\ifad --all --renderer playwright --wait-seconds 60 --cdp-url http://127.0.0.1:9222 --concurrency 2
+
+python scrape.py save https://www.khanacademy.org -o d:\web\khanacdaemy --all --renderer playwright --wait-seconds 60 --cdp-url http://127.0.0.1:9222 --concurrency 2
+
+python scrape.py save https://www.jhu.edu -o d:\web\jhu --all --renderer playwright --wait-seconds 60 --cdp-url http://127.0.0.1:9222 --concurrency 2
+
+
+python scrape.py save https://www.icourse163.org -o d:\web\icourse163 --all --renderer playwright --wait-seconds 60 --cdp-url http://127.0.0.1:9222 --concurrency 2
+python scrape.py analyze https://www.icourse163.org  -o d:\web\icourse163
+
+python scrape.py save https://www.utoronto.ca -o d:\web\utoronto --all --renderer playwright --wait-seconds 60 --cdp-url http://127.0.0.1:9222 --concurrency 2
+
+python scrape.py save https://www.umich.edu -o d:\web\umich --all --renderer playwright --wait-seconds 60 --cdp-url http://127.0.0.1:9222 --concurrency 2
+
+python scrape.py save https://ed.ted.com -o d:\web\ted --all --renderer playwright --wait-seconds 60 --cdp-url http://127.0.0.1:9222 --concurrency 2
 ```
 
 ## 参数说明
@@ -157,3 +177,6 @@ output/
   ```
 - `--headed` 会打开可视化浏览器，便于人工完成验证
 - CDP 模式可以复用已登录的 Chrome 会话，减少验证触发
+
+
+SELECT title, count(*) AS num FROM pages GROUP BY title HAVING  count(*) >10

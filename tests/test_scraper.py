@@ -239,6 +239,21 @@ def test_extract_content_blocks_with_image_and_video():
     assert media_items[1]['index'] == 1  # video 独立序号
 
 
+def test_extract_content_blocks_recognizes_youtube_link_paragraph():
+    html = '''
+    <html><body><main>
+      <p class="youtube-link">https://youtu.be/owicVCu4AB0</p>
+    </main></body></html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://www.unfpa.org/videos')
+
+    media_items = [block for block in blocks if isinstance(block, dict)]
+    assert len(media_items) == 1
+    assert media_items[0]['type'] == 'video'
+    assert media_items[0]['original_url'] == 'https://youtu.be/owicVCu4AB0'
+
+
 def test_extract_content_blocks_keeps_related_section():
     html = '''
     <html>

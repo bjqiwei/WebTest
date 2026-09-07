@@ -43,14 +43,16 @@ PAGE_404_MARKERS = (
     '400 Bad Request',
     'HTTP Status 404 – Not Found',
     '出错啦_中国大学MOOC(慕课)_中国大学MOOC(慕课)',
+    'Page not found |',
 )
 
 # 挑战页/封锁页检测关键字
 # 注意：匹配必须严格区分大小写，避免把正常页面中的泛词误判。
 CHALLENGE_MARKERS = (
     'Just a moment',
+    'Just a moment...',
     'Attention required!',
-    'Checking your browser',
+    #'Checking your browser',
     'Enable JavaScript and Cookies',
     'The request could not be satisfied',
     'Request blocked',
@@ -66,6 +68,15 @@ CHALLENGE_MARKERS = (
     '403 Forbidden',
     '502 Bad Gateway',
     'Arts and Science JS Challenge',
+    'Attention Required! | Cloudflare',
+    'You need to enable JavaScript to run this app.',
+    'This site requires Javascript for this page to display correctly.',
+    '400 Request Header Or Cookie Too Large',
+    '400 Bad Request',
+    'Access denied | nursing.jhu.edu used Cloudflare to restrict access | nursing.jhu.edu | Cloudflare',
+    'Project MUSE -- Verification required!',
+    'Error 536: Invalid request',
+    'Verifying you are human.',
 )
 
 CONTENT_CUTOFF_MARKERS = (
@@ -130,7 +141,7 @@ _log_path: Path | None = None
 _thread_local = threading.local()
 # 每个线程的页面计数，用于定期重启浏览器释放累积内存
 _thread_page_count: dict[int, int] = {}
-BROWSER_RESTART_EVERY_N_PAGES = 100
+BROWSER_RESTART_EVERY_N_PAGES = 1000
 
 
 def _get_thread_browser(cdp_url: str = '', headless: bool = True):
@@ -542,6 +553,14 @@ def _media_from_tag(tag: Tag, base_url: str):
         iframe_src = tag.get('src', '')
         if iframe_src and (EMBED_RE.search(iframe_src) or VIDEO_FILE_RE.search(iframe_src)):
             src = iframe_src
+            media_type = 'video'
+    elif tag.name in ('p', 'div') and any(
+        str(cls).strip().lower() == 'youtube-link'
+        for cls in (tag.get('class') or [])
+    ):
+        text_url = _clean_text(tag.get_text(' ', strip=True))
+        if EMBED_RE.search(text_url):
+            src = text_url
             media_type = 'video'
     elif tag.name == 'a':
         href = tag.get('href', '')
