@@ -1122,15 +1122,25 @@ def _load_html_cache_from_db(start_url: str, outdir: Path) -> list:
     try:
         conn = sqlite3.connect(str(db_path))
         conn.execute("PRAGMA journal_mode=WAL")
-        cursor = conn.execute("SELECT url, final_url, html_path, content_type, video_count, title FROM pages")
+        cursor = conn.execute(
+            "SELECT url, final_url, html_path, content_type, video_count, title, links FROM pages"
+        )
         cache = []
-        for url, final_url, html_path, content_type, video_count, title in cursor:
+        for url, final_url, html_path, content_type, video_count, title, links_json in cursor:
             if html_path:
                 p = Path(html_path)
                 if not p.is_absolute():
                     p = outdir / p
                 html_path = str(p)
-            cache.append({'url': url, 'final_url': final_url, 'html_path': html_path, 'content_type': content_type, 'video_count': video_count, 'title': title})
+            if links_json is None:
+                links = None
+            else:
+                try:
+                    links = json.loads(links_json)
+                except Exception:
+                    links = []
+            cache.append({'url': url,'final_url': final_url,'html_path': html_path,'content_type': content_type,'video_count': video_count,'title': title,'links': links,
+            })
         conn.close()
         return cache
     except Exception:
@@ -1151,27 +1161,6 @@ def _flush_html_batch(conn: sqlite3.Connection, entries: list):
     except Exception as e:
         _log(f'批量写入 HTML 缓存失败: {e}')
         pass
-
-
-def _load_links_cache_from_db(start_url: str, outdir: Path) -> dict:
-    """从 SQLite pages 表加载全部链接缓存到内存 dict。"""
-    db_path = _scrape_db_path(start_url, outdir)
-    if not db_path.exists():
-        return {}
-    try:
-        conn = sqlite3.connect(str(db_path))
-        conn.execute("PRAGMA journal_mode=WAL")
-        cursor = conn.execute("SELECT url, links FROM pages where links IS NOT NULL")
-        result = {}
-        for url, links_json in cursor:
-            try:
-                result[url] = json.loads(links_json)
-            except Exception:
-                result[url] = []
-        conn.close()
-        return result
-    except Exception:
-        return {}
 
 
 def _flush_links_batch(conn: sqlite3.Connection, entries: dict):
@@ -1259,14 +1248,12 @@ def save_site_html(
     initial_html_cache = _load_html_cache_from_db(start_url, outdir)
     saved_count = len(initial_html_cache)
     _log(f'Loaded {saved_count} cached pages from SQLite.')
-    links_cache = _load_links_cache_from_db(start_url, outdir)
-    _log(f'Loaded {len(links_cache)} cached links from SQLite.')
     dirty_html: list = []  # 自上次 flush 后新增的页面记录
     dirty_links: dict = {}  # 记录自上次 flush 后变更的 url -> links
     dirty_failed: list = []  # 自上次 flush 后新增的失败页面记录
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
 
-    # 从本地缓存恢复：优先使用 links_cache 避免重新解析 HTML
+    # 从本地缓存恢复：优先使用缓存记录中的 links，避免重新解析 HTML
     _log(f'Processing {len(initial_html_cache)} cached pages to extract links...')
     for cached in initial_html_cache:
         cached_url = cached['url']
@@ -1304,8 +1291,8 @@ def save_site_html(
             except Exception:
                 pass
 
-        # 优先从 links_cache 读取，否则回退到解析 HTML
-        links = links_cache.get(cached_url, None)
+        # 优先使用缓存的 links，否则回退到解析 HTML
+        links = cached.get('links')
         if links is None:
             try:
                 _log(f'Processing cached URL: {cached_url}')
@@ -1332,6 +1319,7 @@ def save_site_html(
                 queue.append(link)
                 queued.add(_remove_scheme(link))
 
+        del links
     # 启动抓取后不再持有全量缓存列表，避免随抓取过程持续占用内存
     initial_html_cache.clear()
     del initial_html_cache
@@ -1343,7 +1331,7 @@ def save_site_html(
     unlimited_depth = max_depth < 0
     unlimited_pages = max_pages <= 0
     max_concurrency = max(1, int(max_concurrency))
-
+    _log("Starting crawl with initial settings")
     def _append_failed(page_url: str, reason: str, html: str = ''):
         failed_html_path = ''
         if html:
