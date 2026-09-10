@@ -77,6 +77,7 @@ CHALLENGE_MARKERS = (
     'Project MUSE -- Verification required!',
     'Error 536: Invalid request',
     'Verifying you are human.',
+    'Access denied | Department of Political Science',
 )
 
 CONTENT_CUTOFF_MARKERS = (
@@ -876,6 +877,14 @@ def _try_click_challenge_checkbox(page) -> bool:
     return False
 
 
+def _dismiss_playwright_dialog(dialog):
+    """关闭页面脚本对话框；页面关闭时忽略已消失的对话框竞态。"""
+    try:
+        dialog.dismiss()
+    except Exception as exc:
+        _log(f'关闭页面对话框时忽略异常: {exc}')
+
+
 def fetch_html_with_playwright(
     url: str,
     wait_seconds: float = 5.0,
@@ -948,6 +957,8 @@ def fetch_html_with_playwright(
     browser = _get_thread_browser(cdp_url, headless)
     context = _get_thread_context(cdp_url, headless)
     page = context.new_page()
+    # Explicit handling avoids Playwright's implicit dismiss racing with CDP/page close.
+    page.on('dialog', _dismiss_playwright_dialog)
     html = ''
     content_type = ''
     final_url = url
@@ -1244,6 +1255,8 @@ def save_site_html(
     _log(f'Initialized SQLite database at {_scrape_db_path(start_url, outdir)}.')
     failed_pages: list = _load_failed_pages_from_db(start_url, outdir)
     failed_urls: set = {_remove_scheme(p['url']) for p in failed_pages}
+    failed_pages.clear()  # 释放内存
+    del failed_pages
     _log(f'Loaded {len(failed_urls)} failed pages from SQLite.')
     initial_html_cache = _load_html_cache_from_db(start_url, outdir)
     saved_count = len(initial_html_cache)
@@ -1257,23 +1270,23 @@ def save_site_html(
     _log(f'Processing {len(initial_html_cache)} cached pages to extract links...')
     for cached in initial_html_cache:
         cached_url = cached['url']
+        visited.add(_remove_scheme(cached_url))
         # 只读取 content_type 为 html 的文件来提取链接
         ctype = cached.get('content_type', '')
         if not HTML_CONTENT_TYPE_RE.search(ctype):
-            visited.add(_remove_scheme(cached_url))
             #_log(f'跳过非 HTML 缓存 URL: {cached_url} (content_type={ctype})')
             continue
         # 已分析为无视频的页面（video_count=0）：本地 HTML 可能已被删除，无需再下载
         if cached.get('video_count', -1) == 0:
-            visited.add(_remove_scheme(cached_url))
+            continue
         if cached['html_path'] is None:
             #_log(f'缓存记录 html_path 为空: {cached_url}')
             continue
+        
         cached_html_path = Path(cached['html_path'])
-        if cached_html_path.exists():
-            visited.add(_remove_scheme(cached_url))
-        else:
+        if not cached_html_path.exists():
             #_log(f'缓存 HTML 文件不存在: {cached_html_path} (URL: {cached_url})')
+            visited.remove(_remove_scheme(cached_url))
             continue
 
         if cached.get('title') is None:
@@ -1295,29 +1308,25 @@ def save_site_html(
         links = cached.get('links')
         if links is None:
             try:
-                _log(f'Processing cached URL: {cached_url}')
+                _log(f'extract links from cached URL: {cached_url}')
                 cached_html = cached_html_path.read_text(encoding='utf-8')
                 # 遇到links!=[]的并且是block/challenge页面的情况，并不会执行到这里，需要单独写个程序洗出 block/challenge页面的缓存
                 soup = BeautifulSoup(cached_html, 'html.parser')
-                marker = _find_challenge_marker(soup)
-                if marker:
-                    _log(f'Cached HTML is a challenge/block page: {cached_url} (标记: {marker})')
-                    cached_html_path.unlink(missing_ok=True)
-                    visited.remove(_remove_scheme(cached_url))
-                    continue
                 links = _extract_links(soup, cached_url, root_host)
                 dirty_links[cached_url] = links
-            except Exception:
+            except Exception as e:
+                _log(f'Failed to extract links from cached URL: {cached_url} (Exception: {e})')
                 links = []
                 visited.remove(_remove_scheme(cached_url))
 
         for link in links:
-            if _remove_scheme(link) not in visited and _remove_scheme(link) not in failed_urls and _remove_scheme(link) not in queued:
+            url_path = _remove_scheme(link)
+            if url_path not in visited and url_path not in failed_urls and url_path not in queued:
                 if is_file_url(link):
                     _log(f"跳过文件链接: {link}")
                     continue
                 queue.append(link)
-                queued.add(_remove_scheme(link))
+                queued.add(url_path)
 
         del links
     # 启动抓取后不再持有全量缓存列表，避免随抓取过程持续占用内存
@@ -1325,9 +1334,10 @@ def save_site_html(
     del initial_html_cache
 
     # 如果 start_url 不在缓存中，加入队列
-    if _remove_scheme(start_url) not in visited and _remove_scheme(start_url) not in failed_urls and _remove_scheme(start_url) not in queued:
+    url_path = _remove_scheme(start_url)
+    if url_path not in visited and url_path not in failed_urls and url_path not in queued:
         queue.appendleft(start_url)
-        queued.add(_remove_scheme(start_url))
+        queued.add(url_path)
     unlimited_depth = max_depth < 0
     unlimited_pages = max_pages <= 0
     max_concurrency = max(1, int(max_concurrency))
