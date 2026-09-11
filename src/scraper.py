@@ -16,6 +16,8 @@ import threading
 
 import shutil
 import subprocess
+import tracemalloc
+from functools import wraps
 
 import requests
 from bs4 import BeautifulSoup, NavigableString, Tag
@@ -135,14 +137,17 @@ DEFAULT_USER_AGENT = (
     'Chrome/138.0.0.0 Safari/537.36'
 )
 
+# 每个线程抓取指定页数后重启本地 Playwright 浏览器，释放累积资源。
+BROWSER_RESTART_EVERY_N_PAGES = 1000
+
 
 _log_path: Path | None = None
 
 # 每个线程独立的 Playwright + Browser 缓存（Playwright 同步 API 非线程安全）
 _thread_local = threading.local()
+#_tracemalloc_state = threading.local()
 # 每个线程的页面计数，用于定期重启浏览器释放累积内存
 _thread_page_count: dict[int, int] = {}
-BROWSER_RESTART_EVERY_N_PAGES = 1000
 
 
 def _get_thread_browser(cdp_url: str = '', headless: bool = True):
@@ -189,19 +194,25 @@ def _get_thread_context(cdp_url: str = '', headless: bool = True):
     return _thread_local.context
 
 
-def _cleanup_thread_context():
-    """释放当前线程缓存的 browser context 引用。"""
+def _cleanup_thread_context(close_context: bool = False):
+    """释放当前线程缓存的 browser context，按需关闭本地 context。"""
     if hasattr(_thread_local, 'context') and _thread_local.context is not None:
+        if close_context:
+            try:
+                _thread_local.context.close()
+            except Exception:
+                pass
         _thread_local.context = None
 
 
-def _cleanup_thread_browser():
+def _cleanup_thread_browser(close_browser: bool = True):
     """释放当前线程的 Playwright browser 资源，回收内存。"""
     if hasattr(_thread_local, 'browser') and _thread_local.browser is not None:
-        try:
-            _thread_local.browser.close()
-        except Exception:
-            pass
+        if close_browser:
+            try:
+                _thread_local.browser.close()
+            except Exception:
+                pass
         _thread_local.browser = None
     _cleanup_thread_context()
     if hasattr(_thread_local, 'playwright') and _thread_local.playwright is not None:
@@ -230,6 +241,54 @@ def _log(message: str):
                 f.write(line + '\n')
         except Exception:
             pass
+
+
+def _log_tracemalloc_growth(start_snapshot, was_tracing: bool):
+    """记录当前函数相对入口快照的主要 Python 内存增长。"""
+    end_snapshot = tracemalloc.take_snapshot()
+    stats = [
+        stat for stat in end_snapshot.compare_to(start_snapshot, 'traceback')
+        if stat.size_diff > 0
+    ]
+    current, peak = tracemalloc.get_traced_memory()
+    _log(
+        f'tracemalloc: current={current / 1024 / 1024:.2f} MiB, '
+        f'peak={peak / 1024 / 1024:.2f} MiB, '
+        f'positive locations={len(stats)}'
+    )
+    for stat in stats[:10]:
+        _log(
+            f'tracemalloc growth: size={stat.size_diff / 1024 / 1024:.2f} MiB, '
+            f'count={stat.count_diff:+d}'
+        )
+        for frame in stat.traceback.format():
+            _log(f'tracemalloc frame: {frame.strip()}')
+    if not was_tracing:
+        tracemalloc.stop()
+
+
+def _profile_tracemalloc(func):
+    """Profile Python allocations for one complete scraper operation."""
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        was_tracing = tracemalloc.is_tracing()
+        if not was_tracing:
+            tracemalloc.start(50)
+        _tracemalloc_state.start_snapshot = None
+        _tracemalloc_state.was_tracing = was_tracing
+        try:
+            return func(*args, **kwargs)
+        finally:
+            start_snapshot = _tracemalloc_state.start_snapshot
+            if start_snapshot is not None:
+                _log_tracemalloc_growth(
+                    start_snapshot,
+                    _tracemalloc_state.was_tracing,
+                )
+            elif not was_tracing:
+                tracemalloc.stop()
+
+    return wrapped
 
 def is_file_url(url):
     """检测 URL 是否指向文件"""
@@ -951,7 +1010,8 @@ def fetch_html_with_playwright(
     _thread_page_count[tid] = count
     if count % BROWSER_RESTART_EVERY_N_PAGES == 0:
         _log(f'线程累计抓取 {count} 页，重启浏览器释放内存')
-        _cleanup_thread_context()
+        _cleanup_thread_context(close_context=not use_cdp)
+        _cleanup_thread_browser(close_browser=not use_cdp)
 
     # CDP：复用 thread-local browser + context，只开/关 tab
     browser = _get_thread_browser(cdp_url, headless)
@@ -1228,6 +1288,7 @@ def _load_failed_pages_from_db(start_url: str, outdir: Path) -> list:
         return []
 
 
+# @_profile_tracemalloc
 def save_site_html(
     url: str,
     outdir: Path,
@@ -1342,6 +1403,7 @@ def save_site_html(
     unlimited_pages = max_pages <= 0
     max_concurrency = max(1, int(max_concurrency))
     _log("Starting crawl with initial settings")
+    # _tracemalloc_state.start_snapshot = tracemalloc.take_snapshot()
     def _append_failed(page_url: str, reason: str, html: str = ''):
         failed_html_path = ''
         if html:
@@ -1539,9 +1601,13 @@ def save_site_html(
                     break
     except KeyboardInterrupt:
         _log('抓取被用户中断，正在取消剩余任务...')
-        executor.shutdown(wait=False, cancel_futures=True)
     finally:
-        executor.shutdown(wait=False)
+        _log('抓取完成，正在关闭线程池...')
+            # 清理线程池中残留的 Playwright 资源（每个线程独立一份）
+        for _ in range(max_concurrency):
+            executor.submit(_cleanup_thread_browser, not bool(playwright_cdp_url))
+        executor.shutdown(wait=True)
+        _log('线程池已关闭。')
 
             
 
@@ -1553,15 +1619,6 @@ def save_site_html(
     _flush_failed_pages_batch(conn, dirty_failed)
     dirty_failed.clear()
     conn.close()
-
-    # 清理线程池中残留的 Playwright 资源（每个线程独立一份）
-    def _cleanup_worker():
-        _cleanup_thread_browser()
-
-    cleanup_executor = ThreadPoolExecutor(max_workers=max_concurrency)
-    for _ in range(max_concurrency):
-        cleanup_executor.submit(_cleanup_worker)
-    cleanup_executor.shutdown(wait=True)
 
     result = {
         'start_url': start_url,
