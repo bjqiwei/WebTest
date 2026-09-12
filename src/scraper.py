@@ -138,7 +138,7 @@ DEFAULT_USER_AGENT = (
 )
 
 # 每个线程抓取指定页数后重启本地 Playwright 浏览器，释放累积资源。
-BROWSER_RESTART_EVERY_N_PAGES = 1000
+BROWSER_RESTART_EVERY_N_PAGES = 100
 
 
 _log_path: Path | None = None
@@ -1506,7 +1506,8 @@ def save_site_html(
   
     def _flush_dirty():
         if dirty_html or dirty_links or dirty_failed:
-            _log(f'批量保存到 SQLite: {len(dirty_html)} HTML, {len(dirty_links)} links, {len(dirty_failed)} failed, 待处理: {len(queue)}')
+            total_links = sum(len(links) for links in dirty_links.values())
+            _log(f'批量保存到 SQLite: {len(dirty_html)} HTML, {total_links} links, {len(dirty_failed)} failed, 待处理: {len(queue)}')
             _flush_html_batch(conn, dirty_html)
             dirty_html.clear()
             _flush_links_batch(conn, dirty_links)
