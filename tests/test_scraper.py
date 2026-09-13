@@ -239,6 +239,63 @@ def test_extract_content_blocks_with_image_and_video():
     assert media_items[1]['index'] == 1  # video 独立序号
 
 
+def test_extract_content_blocks_picture_uses_largest_image():
+    html = '''
+    <html><body><main>
+      <picture>
+        <source src="/small.webp" width="640" height="360" />
+        <img src="/large.webp" width="1920" height="1080" alt="Large image" />
+      </picture>
+    </main></body></html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com')
+
+    media_items = [block for block in blocks if isinstance(block, dict)]
+    assert len(media_items) == 1
+    assert media_items[0]['type'] == 'image'
+    assert media_items[0]['original_url'] == 'https://example.com/large.webp'
+    assert media_items[0]['alt'] == 'Large image'
+
+
+def test_extract_content_blocks_picture_uses_dimensions_in_source_url():
+    html = '''
+    <html><body><main>
+      <picture>
+        <source srcset="/hero-420x560.webp" />
+        <source srcset="/hero-820x520.webp" />
+        <source srcset="/hero-1920x720.webp" />
+        <img src="" width="1920" height="720" alt="Hero image" />
+      </picture>
+    </main></body></html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com')
+
+    media_items = [block for block in blocks if isinstance(block, dict)]
+    assert len(media_items) == 1
+    assert media_items[0]['original_url'] == 'https://example.com/hero-1920x720.webp'
+    assert media_items[0]['alt'] == 'Hero image'
+
+
+def test_extract_content_blocks_picture_ignores_encoded_separator_in_dimensions():
+    html = '''
+    <html><body><main>
+      <picture>
+        <source srcset="/BeGirl%20420x560px.webp" />
+        <source srcset="/menstrual-health-1920x720.webp" />
+        <img src="" width="1920" height="720" alt="Hero image" />
+      </picture>
+    </main></body></html>
+    '''
+
+    blocks = extract_content_blocks(html, 'https://example.com')
+
+    media_items = [block for block in blocks if isinstance(block, dict)]
+    assert len(media_items) == 1
+    assert media_items[0]['original_url'] == 'https://example.com/menstrual-health-1920x720.webp'
+
+
 def test_extract_content_blocks_recognizes_youtube_link_paragraph():
     html = '''
     <html><body><main>

@@ -633,6 +633,40 @@ def _media_from_tag(tag: Tag, base_url: str):
     elif tag.name == 'img':
         src = tag.get('src', '') or tag.get('data-src', '')
         media_type = 'image'
+    elif tag.name == 'picture':
+        image_candidates = []
+        for image_tag in tag.find_all(['img', 'source']):
+            image_src = image_tag.get('src', '') or image_tag.get('data-src', '')
+            if not image_src:
+                srcset = image_tag.get('srcset', '')
+                if srcset:
+                    image_src = srcset.split(',')[0].strip().split()[0]
+            if not image_src:
+                continue
+
+            def _dimension(name):
+                try:
+                    return int(float(image_tag.get(name, 0)))
+                except (TypeError, ValueError):
+                    return 0
+
+            width = _dimension('width')
+            height = _dimension('height')
+            if not width or not height:
+                dimension_matches = re.findall(
+                    r'(?<!\d)(\d+)\s*[xX]\s*(\d+)',
+                    unquote(image_src),
+                )
+                if dimension_matches:
+                    url_width, url_height = dimension_matches[-1]
+                    width = width or int(url_width)
+                    height = height or int(url_height)
+            image_candidates.append((width * height, width, height, image_src, image_tag))
+
+        if image_candidates:
+            _, _, _, src, selected_tag = max(image_candidates, key=lambda item: item[0])
+            tag = tag.find('img') or selected_tag
+            media_type = 'image'
 
     src = _resolve_url(base_url, src)
     if not src or not media_type:
@@ -777,7 +811,7 @@ def extract_content_blocks(soup: BeautifulSoup, base_url: str, cutoff_markers=No
 
     root = soup.find('main') or soup.body or soup
 
-    tags = ['h1', 'h2', 'h3', 'h4', 'p', 'li', 'video', 'iframe', 'a', 'img']
+    tags = ['h1', 'h2', 'h3', 'h4', 'p', 'li', 'video', 'iframe', 'a', 'picture', 'img']
     candidates = root.find_all(tags)
 
     # 内容截断：找到截断点，丢弃标记（及其后的全部内容）。
@@ -795,6 +829,8 @@ def extract_content_blocks(soup: BeautifulSoup, base_url: str, cutoff_markers=No
 
     for tag in candidates:
         if not isinstance(tag, Tag) or _is_in_noise_area(tag):
+            continue
+        if tag.name == 'img' and tag.find_parent('picture'):
             continue
 
         media = _media_from_tag(tag, base_url)
