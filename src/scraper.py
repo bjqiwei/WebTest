@@ -96,6 +96,8 @@ CUTOFF_CLASSES = (
     frozenset({'related-topics'}),
 )
 
+CUTOFF_TAGS = {'footer'}
+
 
 # 文本噪音 class（仅当元素 class 集合与其中一个候选完全一致时排除）
 NOISE_CLASSES = (
@@ -424,6 +426,8 @@ def _is_same_domain(url: str, root_host: str) -> bool:
 def _is_in_noise_area(tag: Tag) -> bool:
     if tag.name == 'a' and tag.find_parent('figcaption') and _has_primary_media_in_same_figure(tag):
         return True
+    if tag.name == 'header':
+        return True
     # 跳过噪音 class 容器内的元素
     if _is_match_class(tag, noise_classes=NOISE_CLASSES):
         return True
@@ -431,19 +435,9 @@ def _is_in_noise_area(tag: Tag) -> bool:
     for parent in tag.parents:
         if not isinstance(parent, Tag):
             continue
-        if _is_match_class(parent, noise_classes=NOISE_CLASSES):
+        if parent.name == 'header':
             return True
-
-    return False
-
-def _is_in_cutoff_area(tag: Tag) -> bool:
-    if _is_match_class(tag, noise_classes=CUTOFF_CLASSES):
-        return True
-
-    for parent in tag.parents:
-        if not isinstance(parent, Tag):
-            continue
-        if _is_match_class(parent, noise_classes=CUTOFF_CLASSES):
+        if _is_match_class(parent, noise_classes=NOISE_CLASSES):
             return True
 
     return False
@@ -753,14 +747,23 @@ def _is_after_in_doc(tag_a: Tag, tag_b: Tag) -> bool:
     return False
 
 
-def _find_content_cutoff_index(candidates, soup, cutoff_markers):
-    """返回截断点下标（切片用 candidates[:idx]）；未命中返回 None。
+def _candidate_cutoff_index(candidates, marker_el):
+    """将截断元素转换为候选列表下标。"""
+    if marker_el is None:
+        return None
 
-    - 标记元素本身就是候选标签（如正文里的 <h2>Novedades</h2>）：返回该标记的下标，
-      使标记本身及其后的内容都被排除。
-    - 标记元素不是候选标签（如视频版权署名行 <span>）：返回第一个位于标记之后的
-      候选标签下标，标记之前的内容（如视频）保留。
-    """
+    for idx, tag in enumerate(candidates):
+        if tag is marker_el:
+            return idx
+        if marker_el in tag.parents:
+            return idx
+        if _is_after_in_doc(tag, marker_el):
+            return idx
+    return None
+
+
+def _find_content_cutoff_index(candidates, soup, cutoff_markers):
+    """按文本截断标记返回截断点下标。"""
     marker_el = None
     for node in soup.find_all(
         string=lambda s: any(m in s for m in cutoff_markers)
@@ -771,43 +774,51 @@ def _find_content_cutoff_index(candidates, soup, cutoff_markers):
                 and not _is_in_noise_area(node.parent)):
             marker_el = node.parent
             break
-    if marker_el is None:
-        for tag in soup.find_all(True):
-            if not isinstance(tag, Tag):
-                continue
-            if _is_in_noise_area(tag):
-                continue
-            if not _is_in_cutoff_area(tag):
-                continue
-            for idx, cand in enumerate(candidates):
-                if cand is tag:
-                    marker_el = cand
-                    break
-                if cand in tag.descendants:
-                    marker_el = cand
-                    break
-            if marker_el is not None:
-                break
 
-    if marker_el is None:
-        return None
+    return _candidate_cutoff_index(candidates, marker_el)
 
-    for idx, tag in enumerate(candidates):
-        if tag is marker_el:
-            return idx
-        if _is_after_in_doc(tag, marker_el):
-            return idx
+
+def _find_class_cutoff_index(candidates, soup, cutoff_classes):
+    """按 CUTOFF_CLASSES 返回截断点下标。"""
+    for tag in soup.find_all(True):
+        if not isinstance(tag, Tag):
+            continue
+        if _is_in_noise_area(tag):
+            continue
+        if not _is_match_class(tag, noise_classes=cutoff_classes):
+            continue
+        return _candidate_cutoff_index(candidates, tag)
+    
     return None
 
+def _find_tag_cutoff_index(candidates, soup, tag_names: set[str]):
+    """按指定标签名集合返回最早的截断点下标。"""
+    for tag in soup.find_all(list(tag_names)):
+        if not isinstance(tag, Tag):
+            continue
+        if _is_in_noise_area(tag):
+            continue
+        return _candidate_cutoff_index(candidates, tag)
+    
+    return None
 
-def extract_content_blocks(soup: BeautifulSoup, base_url: str, cutoff_markers=None):
+def _find_cutoff_index(candidates, soup):
+    """返回文本标记和 class 规则中最早的截断点下标。"""
+    cutoff_indexes = [
+        cutoff_index
+        for cutoff_index in (
+            _find_tag_cutoff_index(candidates, soup, CUTOFF_TAGS),
+            _find_content_cutoff_index(candidates, soup, CONTENT_CUTOFF_MARKERS),
+            _find_class_cutoff_index(candidates, soup, CUTOFF_CLASSES),
+        )
+        if cutoff_index is not None
+    ]
+    return min(cutoff_indexes) if cutoff_indexes else None
+
+
+def extract_content_blocks(soup: BeautifulSoup, base_url: str):
     """从 HTML 中提取文本块、视频和图片。视频和图片各自拥有独立的序号。
-
-    cutoff_markers: 若页面中出现这些标记，则标记之后的所有内容块都会被忽略。
-    默认使用 CONTENT_CUTOFF_MARKERS；传入空元组可关闭该行为。
     """
-    if cutoff_markers is None:
-        cutoff_markers = CONTENT_CUTOFF_MARKERS
 
     if isinstance(soup, str):
         soup = BeautifulSoup(soup, 'html.parser')
@@ -818,12 +829,11 @@ def extract_content_blocks(soup: BeautifulSoup, base_url: str, cutoff_markers=No
     candidates = root.find_all(tags)
 
     # 内容截断：找到截断点，丢弃标记（及其后的全部内容）。
-    # _find_content_cutoff_index() 已返回合适的切片下标：标记本身是候选时返回其下标
+    # _find_cutoff_index() 已返回合适的切片下标：标记本身是候选时返回其下标
     # （连标记一起排除），标记不是候选时返回其后第一个候选下标（如视频版权行场景保留视频）。
-    if cutoff_markers or CUTOFF_CLASSES:
-        cutoff_index = _find_content_cutoff_index(candidates, soup, cutoff_markers)
-        if cutoff_index is not None:
-            candidates = candidates[:cutoff_index]
+    cutoff_index = _find_cutoff_index(candidates, soup)
+    if cutoff_index is not None:
+        candidates = candidates[:cutoff_index]
 
     blocks = []
     seen_urls = set()

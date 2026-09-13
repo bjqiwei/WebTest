@@ -436,8 +436,8 @@ def test_extract_content_blocks_skips_base64_image_from_data_src():
     assert media_items == [], 'data-src 为 base64 的图片不应被提取'
 
 
-def test_extract_content_blocks_keeps_cutoff_marker_block_but_discards_after_it():
-    """当前实现保留标记本身，但忽略其后的正文内容；视频仍然保留。"""
+def test_extract_content_blocks_keeps_content_when_text_cutoff_is_disabled():
+    """文本 cutoff marker 为空时，marker 后的内容保持不变。"""
     html = '''
     <html>
       <body>
@@ -460,7 +460,7 @@ def test_extract_content_blocks_keeps_cutoff_marker_block_but_discards_after_it(
     assert 'Careers' in texts
     assert 'Work with us' in texts
     assert 'Noticias y testimonios de profesionales' in texts
-    assert 'This content should be ignored.' not in texts
+    assert 'This content should be ignored.' in texts
     videos = [b for b in blocks if isinstance(b, dict) and b['type'] == 'video']
     assert len(videos) == 1
     assert videos[0]['note'] == 'UNICEF Division of Human Resources'
@@ -484,15 +484,15 @@ def test_extract_content_blocks_cutoff_matches_class_name_marker():
     </html>
     '''
 
-    blocks = extract_content_blocks(html, 'https://example.com', cutoff_markers=('Related Articles',))
+    blocks = extract_content_blocks(html, 'https://example.com')
     texts = [b for b in blocks if isinstance(b, str)]
     assert 'Title' in texts
     assert 'Should be cut.' not in texts
     assert 'After marker content should be removed.' not in texts
 
 
-def test_extract_content_blocks_cutoff_can_be_disabled():
-    """传入 cutoff_markers=() 时关闭截断，标记之后的内容仍被保留。"""
+def test_extract_content_blocks_keeps_content_when_cutoff_markers_are_empty():
+    """全局文本 cutoff markers 为空时，标记之后的内容仍被保留。"""
     html = '''
     <html>
       <body>
@@ -505,7 +505,7 @@ def test_extract_content_blocks_cutoff_can_be_disabled():
     </html>
     '''
 
-    blocks = extract_content_blocks(html, 'https://example.com', cutoff_markers=())
+    blocks = extract_content_blocks(html, 'https://example.com')
     assert 'After marker' in blocks
 
 
@@ -529,8 +529,8 @@ def test_extract_content_blocks_no_marker_no_truncation():
     assert 'Second section' in texts
 
 
-def test_extract_content_blocks_cutoff_ignores_marker_in_noise_area():
-    """导航噪音中的标记不应触发截断；正文内的标题仍会保留。"""
+def test_extract_content_blocks_keeps_navigation_marker_text_when_cutoff_is_disabled():
+    """文本 cutoff markers 为空时，导航和正文 marker 都不会截断内容。"""
     html = '''
     <html>
       <body>
@@ -547,12 +547,12 @@ def test_extract_content_blocks_cutoff_ignores_marker_in_noise_area():
     </html>
     '''
 
-    blocks = extract_content_blocks(html, 'https://example.com', cutoff_markers=('Novedades',))
+    blocks = extract_content_blocks(html, 'https://example.com')
     texts = [b for b in blocks if isinstance(b, str)]
     assert 'Title' in texts
     assert 'This is the news section, should be cut.' in texts
     videos = [b for b in blocks if isinstance(b, dict) and b['type'] == 'video']
-    assert len(videos) == 0
+    assert len(videos) == 1
 
 
 def test_extract_content_blocks_skips_button_content():
@@ -903,6 +903,10 @@ def test_fetch_html_playwright_aborted_pdf_returns_empty_html(monkeypatch):
     class FakePage:
         request = FakeRequest()
 
+        def on(self, event, handler):
+            assert event == 'dialog'
+            self.dialog_handler = handler
+
         def route(self, *args, **kwargs):
             return None
 
@@ -1135,6 +1139,27 @@ def _seed_analyze_pages(tmp_path):
     conn.commit()
     conn.close()
     return start_url, db_path, video_file, novideo_file
+
+
+def test_analyze_excludes_head_content(tmp_path):
+    start_url, db_path, video_file, _ = _seed_analyze_pages(tmp_path)
+    video_file.write_text('''<html>
+      <head><meta name="description" content="Head metadata"><p>Head noise</p></head>
+      <body><header><h2>Header navigation noise</h2></header>
+        <main><h1>With video</h1>
+        <iframe src="https://www.youtube-nocookie.com/embed/5r3gIPTuaik"></iframe>
+      </main></body>
+    </html>''', encoding='utf-8')
+
+    result = scraper_module.analyze_saved_html(start_url, tmp_path)
+
+    assert result['page_count'] == 1
+    json_files = list((tmp_path / 'analyze').glob('*.json'))
+    assert len(json_files) == 1
+    payload = json.loads(json_files[0].read_text(encoding='utf-8'))
+    assert 'Head noise' not in payload['content_blocks']
+    assert 'Header navigation noise' not in payload['content_blocks']
+    assert 'With video' in payload['content_blocks']
 
 
 def test_analyze_delete_html_no_video_keeps_db_records(tmp_path):
