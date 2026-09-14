@@ -47,6 +47,7 @@ PAGE_404_MARKERS = (
     '出错啦_中国大学MOOC(慕课)_中国大学MOOC(慕课)',
     'Page not found |',
     'Page not found | Peabody Institute',
+    'Access denied | Panthera',
 )
 
 # 挑战页/封锁页检测关键字
@@ -138,6 +139,11 @@ NOISE_CLASSES = (
     frozenset({'title-vertical'}),
     frozenset({'share-card'}),
     frozenset({'breadcrumb','bg-bege2'}),
+    frozenset({'logo'}),
+    frozenset({'page-title'}),
+    frozenset({'HeroImg'}),
+    frozenset({'title-wrapper'}),
+    frozenset({'pswp-gallery', 'panthera-gallery', 'gallery--with-button'})
 )
 
 
