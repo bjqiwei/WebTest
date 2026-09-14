@@ -1727,10 +1727,14 @@ def analyze_saved_html(start_url: str, outdir: Path, progress_callback=None, pha
     """
     set_log_file(outdir / 'analyze.log')
     pages = _load_unanalyzed_pages_from_db(start_url, outdir)
+    start_host = urlparse(start_url).netloc
     deduped_pages = []
     analyzed_final_urls = set()
     for page in pages:
         final_url = page.get('final_url') or page['url']
+        if not _is_same_domain(final_url, start_host):
+            _log(f'跳过外域 final_url 页面: {page["url"]} -> {final_url}')
+            continue
         final_key = _remove_scheme(final_url)
         if final_key in analyzed_final_urls:
             _log(f'跳过 final_url 已分析页面: {page["url"]} -> {final_url}')

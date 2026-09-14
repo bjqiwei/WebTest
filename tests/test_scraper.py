@@ -1227,6 +1227,41 @@ def test_analyze_skips_duplicate_final_url(tmp_path):
     assert rows['https://example.com/b'] == -1
 
 
+def test_analyze_skips_external_final_url(tmp_path):
+    import sqlite3
+
+    start_url = 'https://example.com'
+    local_file = tmp_path / 'local.html'
+    external_file = tmp_path / 'external.html'
+    html = '<html><body><main><video src="/intro.mp4"></video></main></body></html>'
+    local_file.write_text(html, encoding='utf-8')
+    external_file.write_text(html, encoding='utf-8')
+
+    db_path = scraper_module._scrape_db_path(start_url, tmp_path)
+    conn = scraper_module._init_db(db_path)
+    conn.executemany(
+      "INSERT OR REPLACE INTO pages (url, final_url, html_path, content_type, video_count, image_count)"
+      " VALUES (?, ?, ?, ?, -1, -1)",
+      [
+        ('https://example.com/local', 'https://example.com/local', str(local_file), 'text/html'),
+        ('https://example.com/redirect', 'https://other.example/landing', str(external_file), 'text/html'),
+      ],
+    )
+    conn.commit()
+    conn.close()
+
+    result = scraper_module.analyze_saved_html(start_url, tmp_path)
+
+    assert result['page_count'] == 1
+    json_files = list((tmp_path / 'analyze').glob('*.json'))
+    assert len(json_files) == 1
+    conn = sqlite3.connect(str(db_path))
+    rows = dict(conn.execute("SELECT url, video_count FROM pages ORDER BY url"))
+    conn.close()
+    assert rows['https://example.com/local'] == 1
+    assert rows['https://example.com/redirect'] == -1
+
+
 def test_analyze_output_filename_does_not_duplicate_page_name(tmp_path):
     start_url = 'https://example.com'
     analyze_dir = tmp_path / 'analyze'
