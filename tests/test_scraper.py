@@ -152,7 +152,7 @@ def test_safe_name_strips_www_prefix():
 
 
 class TestNormalizeUrl:
-    """单元测试 URL 归一化：去 fragment/query、去尾部斜杠、补 www。"""
+    """单元测试 URL 归一化：保留 query、去 fragment、去尾部斜杠。"""
 
     def test_trailing_slash_collapses(self):
         assert scraper_module._normalize_url('https://www.panthera.org/cat/small-cats') == \
@@ -169,9 +169,10 @@ class TestNormalizeUrl:
         assert scraper_module._normalize_url('https://panthera.org/') == \
                scraper_module._normalize_url('https://panthera.org')
 
-    def test_query_and_fragment_stripped(self):
-        assert scraper_module._normalize_url('https://panthera.org/cat/small-cats/?utm=1#top') == \
-               'https://panthera.org/cat/small-cats'
+    def test_query_is_preserved_and_fragment_stripped(self):
+      assert scraper_module._normalize_url(
+        'https://panthera.org/cat/small-cats/?params=1#top'
+      ) == 'https://panthera.org/cat/small-cats?params=1'
 
     def test_apex_www_not_added(self):
         # _normalize_url 不再补 www 前缀（www/裸域名的去重交给 _remove_scheme）

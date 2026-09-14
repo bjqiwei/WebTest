@@ -400,9 +400,10 @@ def _normalize_url(url: str) -> str:
         return ''
     path = parsed.path or '/'
     # 统一去掉路径末尾的斜杠（含根路径），使 /cat/small-cats 与 /cat/small-cats/、
-    # 以及 panthera.org 与 panthera.org/ 都视为同一 URL（根路径规范为无斜杠形式）
+    # 以及 panthera.org 与 panthera.org/ 都视为同一 URL（根路径规范为无斜杠形式）。
+    # 保留 query 参数，避免丢失 params、v 等会影响页面内容的参数。
     path = path.rstrip('/')
-    return parsed._replace(path=path, query='', fragment='').geturl()
+    return parsed._replace(path=path, fragment='').geturl()
 
 
 def _url_depth(url: str) -> int:
@@ -1730,7 +1731,7 @@ def analyze_saved_html(start_url: str, outdir: Path, progress_callback=None, pha
     analyzed_final_urls = set()
     for page in pages:
         final_url = page.get('final_url') or page['url']
-        final_key = _remove_scheme(_normalize_url(final_url))
+        final_key = _remove_scheme(final_url)
         if final_key in analyzed_final_urls:
             _log(f'跳过 final_url 已分析页面: {page["url"]} -> {final_url}')
             continue
