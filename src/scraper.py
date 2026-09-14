@@ -46,6 +46,7 @@ PAGE_404_MARKERS = (
     'HTTP Status 404 – Not Found',
     '出错啦_中国大学MOOC(慕课)_中国大学MOOC(慕课)',
     'Page not found |',
+    'Page not found | Peabody Institute',
 )
 
 # 挑战页/封锁页检测关键字
@@ -87,6 +88,8 @@ CHALLENGE_MARKERS = (
 
 CONTENT_CUTOFF_MARKERS = (
     # 页面中出现该标记后，其后的内容块全部忽略（例如视频版权/署名行等）
+    'Related topics',
+    'Related Content',
 )
 
 CUTOFF_CLASSES = (
@@ -117,7 +120,6 @@ NOISE_CLASSES = (
     frozenset({'lang-switcher'}),
     frozenset({'nav'}),
     frozenset({'header'}),
-    frozenset({'footer'}),
     frozenset({'aside'}),
     frozenset({'noscript'}),
     # 视觉隐藏元素的 class 关键字（如 skip-link、screen-reader-only）
@@ -125,6 +127,17 @@ NOISE_CLASSES = (
     frozenset({'visually-hidden'}),
     frozenset({'sr-only'}),
     frozenset({'get-publication', 'grey-lightest-bg'}),
+    frozenset({'select-wrappers', 'select-dropdown'}),
+    frozenset({'btn-vidoplay'}),
+    frozenset({'content-type'}),
+    frozenset({'date'}),
+    frozenset({'copyr-dtls'}),
+    frozenset({'crdtwrp'}),
+    frozenset({'connect-block', 'pad-t-b', 'level2'}),
+    frozenset({'camp-cnt'}),
+    frozenset({'title-vertical'}),
+    frozenset({'share-card'}),
+    frozenset({'breadcrumb','bg-bege2'}),
 )
 
 
