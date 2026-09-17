@@ -1,14 +1,26 @@
 import json
 import re
 from pathlib import Path
-import src.scraper as scraper_module
-
 from src.scraper import (
   extract_content_blocks,
   fetch_html,
   is_file_url,
   scrape_site,
 )
+
+
+def test_click_button_video_child_is_extracted_as_video():
+  urls = [
+    'https://video.example/one.m3u8?token=1',
+    'https://video.example/two.m3u8?token=2',
+  ]
+  videos = ''.join(f'<video src="{url}"></video>' for url in urls)
+  html = f'<main><a class="clickBtn">播放{videos}</a></main>'
+
+  blocks = extract_content_blocks(html, 'https://icourse163.org/course')
+
+  assert [block['original_url'] for block in blocks] == urls
+  assert blocks[0]['type'] == 'video'
 
 
 class TestIsFileUrl:

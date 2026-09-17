@@ -5,7 +5,7 @@ import re
 import sqlite3
 from datetime import datetime
 import hashlib
-from html import unescape
+from html import escape, unescape
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED, as_completed
 from pathlib import Path
@@ -54,7 +54,6 @@ PAGE_404_MARKERS = (
 # 注意：匹配必须严格区分大小写，避免把正常页面中的泛词误判。
 CHALLENGE_MARKERS = (
     'Just a moment',
-    'Just a moment...',
     'Attention required!',
     #'Checking your browser',
     'Enable JavaScript and Cookies',
@@ -1013,6 +1012,11 @@ def _dismiss_playwright_dialog(dialog):
         _log(f'关闭页面对话框时忽略异常: {exc}')
 
 
+def _is_icourse163_url(url: str) -> bool:
+    host = urlparse(url).netloc.lower().split(':', 1)[0]
+    return host == 'icourse163.org' or host.endswith('.icourse163.org')
+
+
 def fetch_html_with_playwright(
     url: str,
     wait_seconds: float = 5.0,
@@ -1028,6 +1032,13 @@ def fetch_html_with_playwright(
     def _navigate_and_capture(page, url, body_deadline, wait_seconds):
         """在已打开的 page 上导航并捕获 HTML。返回 (html, content_type, final_url)。"""
         _log(f'开始打开页面: {url}')
+        captured_m3u8_urls = []
+
+        def _record_m3u8_request(request):
+            if '.m3u8' in request.url.lower():
+                captured_m3u8_urls.append(request.url)
+
+        page.on('request', _record_m3u8_request)
         page.route("**/google-analytics.com/**", lambda route: route.abort())
         try:
             response = page.goto(url, wait_until='domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
@@ -1049,10 +1060,10 @@ def fetch_html_with_playwright(
 
         try:
             #_log(f'等待 DOM 加载完成: {url} 超时时间: {max(10.0, body_deadline - time.time()):.1f}秒')
-            page.wait_for_load_state('load', timeout=max(10.0, body_deadline - time.time()) * 1000)
+            page.wait_for_load_state('domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
         except TimeoutError:
             _log(f'等待 DOM 加载超时: {url}')
-            return '', ctype, page.url
+            # 部分课程页持续加载长连接，但主体 DOM 已可交互；继续执行播放点击。
 
         if HTML_CONTENT_TYPE_RE.search(ctype) and _is_challenge_or_block_page(page.content()):
             soup = BeautifulSoup(page.content(),'html.parser')
@@ -1066,9 +1077,78 @@ def fetch_html_with_playwright(
                 page.wait_for_timeout(1000)
                 if not _is_challenge_or_block_page(page.content()):
                     break
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(3000)
 
-        return page.content(), ctype, final_url
+        if _is_icourse163_url(url):
+            for index in range(10):
+                locator = page.locator('a.clickBtn')
+                if not locator.count():
+                    break
+                candidate = locator.first
+                try:
+                    if not candidate.is_visible():
+                        continue
+                    has_play_text = candidate.evaluate(
+                        """element => Array.from(element.children).some(
+                            child => child.textContent.trim().includes('播放')
+                        )"""
+                    )
+                    if not has_play_text:
+                        continue
+                    already_attempted = candidate.evaluate(
+                        "element => Boolean(element.__scraperPlayAttempted)"
+                    )
+                    if already_attempted:
+                        break
+                    captured_count_before_click = len(captured_m3u8_urls)
+                    video_count_before_click = page.locator('video').count()
+                    candidate.evaluate(
+                        "element => { element.__scraperPlayAttempted = true; element.click(); }"
+                    )
+                    capture_wait_ms = max(5000, min(int(wait_seconds * 1000), 15000))
+                    capture_deadline = time.time() + capture_wait_ms / 1000
+                    while (
+                        len(captured_m3u8_urls) == captured_count_before_click
+                        and time.time() < capture_deadline
+                    ):
+                        page.wait_for_timeout(500)
+                except Exception as exc:
+                    _log(f'点击播放按钮失败: {url}, index={index}, 错误: {exc}')
+                    continue
+                new_m3u8_urls = captured_m3u8_urls[captured_count_before_click:]
+                if new_m3u8_urls:
+                    try:
+                        page.evaluate(
+                            """(args) => {
+                                const {urls, previousVideoCount} = args;
+                                const videos = Array.from(document.querySelectorAll('video'));
+                                const player = videos[previousVideoCount] || videos.at(-1);
+                                if (!player) {
+                                    return;
+                                }
+                                player.src = urls[0];
+                                let insertionPoint = player;
+                                for (const url of urls.slice(1)) {
+                                    const video = document.createElement('video');
+                                    video.src = url;
+                                    insertionPoint.insertAdjacentElement('afterend', video);
+                                    insertionPoint = video;
+                                }
+                            }""",
+                            {
+                                'urls': list(dict.fromkeys(new_m3u8_urls)),
+                                'previousVideoCount': video_count_before_click,
+                            },
+                        )
+                    except Exception as exc:
+                        _log(f'添加 m3u8 video 失败: {url}, index={index}, 错误: {exc}')
+
+            if captured_m3u8_urls:
+                _log(f'点击播放后捕获 m3u8: {url} ({len(captured_m3u8_urls)} 个)')
+
+        html = page.content()
+
+        return html, ctype, final_url
 
     use_cdp = bool(cdp_url)
 
