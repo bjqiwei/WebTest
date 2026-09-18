@@ -14,24 +14,12 @@ from pathlib import Path
 # 确保能找到 src.scraper
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bs4 import BeautifulSoup
-from src.scraper import _find_challenge_marker
+from src.scraper import CHALLENGE_MARKERS, _find_challenge_marker
 
 NUM_THREADS = 10
+BATCH_SIZE = 25
 
 _lock = threading.Lock()
-
-
-def _chunks(lst, n):
-    """将 lst 尽量均匀地分成 n 份，返回每份的 (起始索引, 长度)。"""
-    size = len(lst)
-    chunks = []
-    start = 0
-    for i in range(n):
-        # 前 (size % n) 份多分一个元素
-        chunk_len = size // n + (1 if i < size % n else 0)
-        chunks.append(lst[start:start + chunk_len])
-        start += chunk_len
-    return chunks
 
 
 def _process_files(file_batch, thread_id, dry_run):
@@ -44,6 +32,11 @@ def _process_files(file_batch, thread_id, dry_run):
         except Exception as e:
             with _lock:
                 print(f'[线程{thread_id}] 读取失败: {fp} ({e})')
+            continue
+
+        # Most files do not contain any marker. Avoid building a full DOM for
+        # those files; the soup check below remains the source of truth.
+        if not any(marker in html for marker in CHALLENGE_MARKERS):
             continue
 
         marker = _find_challenge_marker(BeautifulSoup(html, 'html.parser'))
@@ -71,22 +64,23 @@ def clean_html_dir(root_dir: Path, dry_run: bool = False):
     total = len(html_files)
     print(f'共发现 {total} 个 HTML 文件，使用 {NUM_THREADS} 个线程处理。')
 
-    batches = _chunks(html_files, NUM_THREADS)
-    # 过滤掉空批次
-    non_empty = [(i, b) for i, b in enumerate(batches, start=1) if b]
+    batches = [html_files[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
 
     with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         fut_to_thread = {
-            executor.submit(_process_files, batch, tid, dry_run): tid
-            for tid, batch in non_empty
+            executor.submit(_process_files, batch, (i % NUM_THREADS) + 1, dry_run): i
+            for i, batch in enumerate(batches)
         }
         deleted = 0
+        completed = 0
         for fut in as_completed(fut_to_thread):
-            tid = fut_to_thread[fut]
+            batch_number = fut_to_thread[fut]
             try:
                 deleted += fut.result()
             except Exception as e:
-                print(f'[线程{tid}] 发生异常: {e}')
+                print(f'[批次{batch_number + 1}] 发生异常: {e}')
+            completed += len(batches[batch_number])
+            print(f'进度: {completed}/{total} ({completed / total:.1%})', flush=True)
 
     print(f'\n完成。共扫描 {total} 个 HTML 文件，命中并{"（模拟）" if dry_run else ""}删除 {deleted} 个。')
 
