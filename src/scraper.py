@@ -1028,8 +1028,24 @@ def fetch_html_with_playwright(
     def _navigate_and_capture(page, url, body_deadline, wait_seconds):
         """在已打开的 page 上导航并捕获 HTML。返回 (html, content_type, final_url)。"""
         _log(f'开始打开页面: {url}')
-        page.route("**/google-analytics.com/**", lambda route: route.abort())
+
         try:
+            # Use CDP blocking instead of page.route(): route interception disables
+            # Chromium's HTTP cache for every request on the page.
+            #cdp_session = page.context.new_cdp_session(page)
+            #cdp_session.send('Network.enable')
+            #cdp_session.send('Network.setBlockedURLs', {
+            #    'urls': [
+            #        '*.ico', '*.ICO',
+            #        '*.jpg', '*.JPG',
+            #        '*.jpeg', '*.JPEG',
+            #        '*.png', '*.PNG',
+            #        '*.gif', '*.GIF',
+            #        '*.webp', '*.WEBP',
+            #        '*.svg', '*.SVG',
+            #    ]
+            #})
+
             response = page.goto(url, wait_until='domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
             final_url = _normalize_url(response.url) if response is not None else _normalize_url(page.url)
             ctype = response.headers.get('content-type', '') if response is not None else ''
