@@ -1032,19 +1032,39 @@ def fetch_html_with_playwright(
         try:
             # Use CDP blocking instead of page.route(): route interception disables
             # Chromium's HTTP cache for every request on the page.
-            #cdp_session = page.context.new_cdp_session(page)
-            #cdp_session.send('Network.enable')
-            #cdp_session.send('Network.setBlockedURLs', {
-            #    'urls': [
-            #        '*.ico', '*.ICO',
-            #        '*.jpg', '*.JPG',
-            #        '*.jpeg', '*.JPEG',
-            #        '*.png', '*.PNG',
-            #        '*.gif', '*.GIF',
-            #        '*.webp', '*.WEBP',
-            #        '*.svg', '*.SVG',
-            #    ]
-            #})
+            cdp_session = page.context.new_cdp_session(page)
+            start_host = urlparse(url).netloc
+            def handle_paused_request(params):
+                request_id = params.get('requestId')
+                request = params.get('request', {})
+                request_url = request.get('url', '')
+                resource_type = params.get('resourceType', '')
+                parsed_url = urlparse(request_url)
+                is_cross_domain = (
+                    parsed_url.scheme in ('http', 'https')
+                    and not _is_same_domain(request_url, start_host)
+                )
+                should_block = resource_type == 'Image' or is_cross_domain
+                try:
+                    if should_block:
+                        cdp_session.send('Fetch.failRequest', {
+                            'requestId': request_id,
+                            'errorReason': 'BlockedByClient',
+                        })
+                    else:
+                        cdp_session.send('Fetch.continueRequest', {
+                            'requestId': request_id,
+                        })
+                except Exception as request_error:
+                    # The request can finish while this synchronous callback is
+                    # being scheduled, making its interception id invalid.
+                    if 'Invalid InterceptionId' not in str(request_error):
+                        _log(f'处理暂停请求时忽略异常: {request_error}')
+
+            cdp_session.on('Fetch.requestPaused', handle_paused_request)
+            cdp_session.send('Fetch.enable', {
+                'patterns': [{'urlPattern': '*', 'requestStage': 'Request'}]
+            })
 
             response = page.goto(url, wait_until='domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
             final_url = _normalize_url(response.url) if response is not None else _normalize_url(page.url)

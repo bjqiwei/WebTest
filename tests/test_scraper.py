@@ -37,6 +37,10 @@ class TestIsFileUrl:
     def test_unicef_media_pattern(self):
         assert is_file_url('https://www.unicef.org/media/7606/file') is True
 
+    def test_fetch_html_with_playwright_recovers_from_err_blocked_by_client(monkeypatch):
+      class FakeResponse:
+        url = 'https://example.com/page'
+        headers = {'content-type': 'text/html; charset=utf-8'}
     def test_unicef_media_pattern_with_query(self):
         assert is_file_url('https://www.unicef.org/media/7606/file?download=1') is True
 
