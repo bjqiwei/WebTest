@@ -1483,6 +1483,9 @@ def save_site_html(
                 soup = BeautifulSoup(cached_html, 'html.parser')
                 links = _extract_links(soup, cached_url, root_host)
                 dirty_links[cached_url] = links
+                if len(dirty_links) > 100:
+                    _flush_links_batch(conn, dirty_links)
+                    dirty_links.clear()
             except Exception as e:
                 _log(f'Failed to extract links from cached URL: {cached_url} (Exception: {e})')
                 links = []
@@ -1495,7 +1498,7 @@ def save_site_html(
                 if is_file_url(link):
                     _log(f"跳过文件链接: {link}")
                     continue
-                _log(f'Adding link to queue: {_rmquery_url(link)}')
+                #_log(f'Adding link to queue: {_rmquery_url(link)}')
                 queue.append(_rmquery_url(link))
                 queued.add(url_path)
 
