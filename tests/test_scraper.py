@@ -156,7 +156,7 @@ def test_safe_name_strips_www_prefix():
 
 
 class TestNormalizeUrl:
-    """单元测试 URL 归一化：保留 query、去 fragment、去尾部斜杠。"""
+    """单元测试 URL 归一化：去 fragment/query、去尾部斜杠、补 www。"""
 
     def test_trailing_slash_collapses(self):
         assert scraper_module._normalize_url('https://www.panthera.org/cat/small-cats') == \
@@ -173,10 +173,15 @@ class TestNormalizeUrl:
         assert scraper_module._normalize_url('https://panthera.org/') == \
                scraper_module._normalize_url('https://panthera.org')
 
-    def test_query_is_preserved_and_fragment_stripped(self):
-      assert scraper_module._normalize_url(
-        'https://panthera.org/cat/small-cats/?params=1#top'
-      ) == 'https://panthera.org/cat/small-cats?params=1'
+    def test_query_and_fragment_stripped(self):
+        assert scraper_module._normalize_url('https://panthera.org/cat/small-cats/?utm=1#top') == \
+               'https://panthera.org/cat/small-cats'
+
+    def test_rmquery_url_removes_query_only(self):
+        assert scraper_module._rmquery_url('https://example.com/page?a=1&b=2#top') == \
+               'https://example.com/page#top'
+        assert scraper_module._rmquery_url('https://example.com/page') == \
+               'https://example.com/page'
 
     def test_apex_www_not_added(self):
         # _normalize_url 不再补 www 前缀（www/裸域名的去重交给 _remove_scheme）
@@ -203,6 +208,15 @@ class TestNormalizeUrl:
                scraper_module._remove_scheme('https://panthera.org/x')
         assert scraper_module._remove_scheme('http://panthera.org/') == 'panthera.org'
         assert scraper_module._remove_scheme('https://panthera.org/www/foo') == 'panthera.org/www/foo'
+
+    def test_remove_scheme_normalizes_host_and_path(self):
+      assert scraper_module._remove_scheme('https://Example.COM/page/') == 'example.com/page'
+      assert scraper_module._remove_scheme('https://example.com/page/?a=1') == 'example.com/page'
+
+    def test_remove_scheme_discards_query_and_fragment(self):
+        assert scraper_module._remove_scheme('https://example.com/page?a=1&b=2#top') == 'example.com/page'
+        assert scraper_module._remove_scheme('https://example.com/page?a=1') == \
+               scraper_module._remove_scheme('https://example.com/page?a=2')
 
 
 def test_extract_links_normalizes_trailing_slash():

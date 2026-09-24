@@ -406,10 +406,14 @@ def _normalize_url(url: str) -> str:
         return ''
     path = parsed.path or '/'
     # 统一去掉路径末尾的斜杠（含根路径），使 /cat/small-cats 与 /cat/small-cats/、
-    # 以及 panthera.org 与 panthera.org/ 都视为同一 URL（根路径规范为无斜杠形式）。
-    # 保留 query 参数，避免丢失 params、v 等会影响页面内容的参数。
+    # 以及 panthera.org 与 panthera.org/ 都视为同一 URL（根路径规范为无斜杠形式）
     path = path.rstrip('/')
     return parsed._replace(path=path, fragment='').geturl()
+
+
+def _rmquery_url(url: str) -> str:
+    """Remove query parameters while preserving the rest of the URL."""
+    return urlparse(url)._replace(query='', fragment='').geturl()
 
 
 def _url_depth(url: str) -> int:
@@ -423,14 +427,12 @@ def _remove_scheme(url: str) -> str:
     使 http/https、www./裸域名 都视为同一页面。
     注意：只移除 host 部分的 www.，不影响路径里的 www。
     """
-    rest = url.split('://', 1)[-1]
-    if '/' in rest:
-        host, _, path = rest.partition('/')
-    else:
-        host, path = rest, ''
-    if host.lower().startswith('www.'):
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if host.startswith('www.'):
         host = host[4:]
-    return host + ('/' + path if path else '')
+    path = parsed.path.rstrip('/')
+    return f'{host}{path}'
 
 
 def _is_same_domain(url: str, root_host: str) -> bool:
@@ -1067,7 +1069,7 @@ def fetch_html_with_playwright(
             })
 
             response = page.goto(url, wait_until='domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
-            final_url = _normalize_url(response.url) if response is not None else _normalize_url(page.url)
+            final_url = response.url if response is not None else page.url
             ctype = response.headers.get('content-type', '') if response is not None else ''
         except Exception as goto_err:
             err_msg = str(goto_err)
@@ -1444,6 +1446,7 @@ def save_site_html(
             continue
         # 已分析为无视频的页面（video_count=0）：本地 HTML 可能已被删除，无需再下载
         if cached.get('video_count', -1) == 0:
+            #_log(f'已分析为无视频的页面，跳过下载: {cached_url}')
             continue
         if cached['html_path'] is None:
             #_log(f'缓存记录 html_path 为空: {cached_url}')
@@ -1487,11 +1490,13 @@ def save_site_html(
 
         for link in links:
             url_path = _remove_scheme(link)
+            #_log(f'Processing link: {url_path}')
             if url_path not in visited and url_path not in failed_urls and url_path not in queued:
                 if is_file_url(link):
                     _log(f"跳过文件链接: {link}")
                     continue
-                queue.append(link)
+                _log(f'Adding link to queue: {_rmquery_url(link)}')
+                queue.append(_rmquery_url(link))
                 queued.add(url_path)
 
         del links
@@ -1595,14 +1600,15 @@ def save_site_html(
             if not unlimited_pages and saved_count >= max_pages:
                 return False
             current_url = queue.popleft()
-            queued.discard(_remove_scheme(current_url))
+            url_path = _remove_scheme(current_url)
+            queued.discard(url_path)
             depth = _url_depth(current_url)
             if not unlimited_depth and depth > max_depth:
                 _log(f'跳过超出深度限制的 URL: {current_url} (depth={depth})')
                 continue
-            if _remove_scheme(current_url) in visited:
+            if url_path in visited:
                 continue
-            visited.add(_remove_scheme(current_url))
+            visited.add(url_path)
             future = executor.submit(_fetch_one, current_url)
             pending[future] = current_url
             #_log(f'提交线程: {current_url}, 待处理: {len(queue)}')
@@ -1691,12 +1697,13 @@ def save_site_html(
 
                 if links:
                     for link in links:
-                        if _remove_scheme(link) not in visited and _remove_scheme(link) not in failed_urls and _remove_scheme(link) not in queued:
+                        url_path = _remove_scheme(link)
+                        if url_path not in visited and url_path not in failed_urls and url_path not in queued:
                             if is_file_url(link):
                                 _log(f"跳过文件链接: {link}")
                                 continue
-                            queue.append(link)
-                            queued.add(_remove_scheme(link))
+                            queue.append(_rmquery_url(link))
+                            queued.add(url_path)
                 del html
                 del item
 
