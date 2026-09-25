@@ -422,7 +422,7 @@ def _url_depth(url: str) -> int:
     return len([segment for segment in path.split('/') if segment]) if path else 0
 
 
-def _remove_scheme(url: str) -> str:
+def _remove_scheme(url: str, use_query: bool = False) -> str:
     """去重用的 key：去掉 scheme（http/https）并移除 host 的 www. 前缀，
     使 http/https、www./裸域名 都视为同一页面。
     注意：只移除 host 部分的 www.，不影响路径里的 www。
@@ -432,7 +432,8 @@ def _remove_scheme(url: str) -> str:
     if host.startswith('www.'):
         host = host[4:]
     path = parsed.path.rstrip('/')
-    return f'{host}{path}'
+    query = f'?{parsed.query}' if parsed.query and use_query else ''
+    return f'{host}{path}{query}'
 
 
 def _is_same_domain(url: str, root_host: str) -> bool:
@@ -1276,6 +1277,9 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pages_video_count ON pages(video_count)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pages_created_at ON pages(created_at)"
+        )
     except Exception:
         pass
 
@@ -1787,7 +1791,7 @@ def analyze_saved_html(start_url: str, outdir: Path, progress_callback=None, pha
         if not _is_same_domain(final_url, start_host):
             _log(f'跳过外域 final_url 页面: {page["url"]} -> {final_url}')
             continue
-        final_key = _remove_scheme(final_url)
+        final_key = _remove_scheme(final_url, True)
         if final_key in analyzed_final_urls:
             _log(f'跳过 final_url 已分析页面: {page["url"]} -> {final_url}')
             continue

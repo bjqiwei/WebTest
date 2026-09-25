@@ -210,12 +210,13 @@ class TestNormalizeUrl:
         assert scraper_module._remove_scheme('https://panthera.org/www/foo') == 'panthera.org/www/foo'
 
     def test_remove_scheme_normalizes_host_and_path(self):
-      assert scraper_module._remove_scheme('https://Example.COM/page/') == 'example.com/page'
-      assert scraper_module._remove_scheme('https://example.com/page/?a=1') == 'example.com/page'
+        assert scraper_module._remove_scheme('https://Example.COM/page/') == 'example.com/page'
+        assert scraper_module._remove_scheme('https://example.com/page/?a=1') == 'example.com/page?a=1'
 
-    def test_remove_scheme_discards_query_and_fragment(self):
-        assert scraper_module._remove_scheme('https://example.com/page?a=1&b=2#top') == 'example.com/page'
-        assert scraper_module._remove_scheme('https://example.com/page?a=1') == \
+    def test_remove_scheme_preserves_query_and_discards_fragment(self):
+        assert scraper_module._remove_scheme('https://example.com/page?a=1&b=2#top') == \
+               'example.com/page?a=1&b=2'
+        assert scraper_module._remove_scheme('https://example.com/page?a=1') != \
                scraper_module._remove_scheme('https://example.com/page?a=2')
 
 
