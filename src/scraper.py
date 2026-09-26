@@ -158,7 +158,7 @@ HTML_CONTENT_TYPE_RE = re.compile(r'^\s*(?:text/html|application/xhtml\+xml)\s*(
 DEFAULT_USER_AGENT = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
     'AppleWebKit/537.36 (KHTML, like Gecko) '
-    'Chrome/138.0.0.0 Safari/537.36'
+    'Chrome/154.0.0.0 Safari/537.36'
 )
 
 # 每个线程抓取指定页数后重启本地 Playwright 浏览器，释放累积资源。
@@ -1155,7 +1155,25 @@ def fetch_html(
 ) -> dict:
     """返回 {'html': str, 'content_type': str, 'final_url': str}"""
     headers = {
-        'User-Agent': DEFAULT_USER_AGENT
+        #'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        #'Accept-Language': 'zh-CN,zh;q=0.9',
+        #'Cache-Control': 'max-age=0',
+        #'Priority': 'u=0, i',
+        #'Sec-CH-UA': '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
+        #'Sec-CH-UA-Arch': '"x86"',
+        #'Sec-CH-UA-Bitness': '"64"',
+        #'Sec-CH-UA-Full-Version': '"154.0.8037.58"',
+        #'Sec-CH-UA-Full-Version-List': '"Chromium";v="154.0.8037.58", "Google Chrome";v="154.0.8037.58", "Not A(Brand";v="99.0.0.0"',
+        #'Sec-CH-UA-Mobile': '?0',
+        #'Sec-CH-UA-Model': '""',
+        #'Sec-CH-UA-Platform': '"Windows"',
+        #'Sec-CH-UA-Platform-Version': '"19.0.0"',
+        #'Sec-Fetch-Dest': 'document',
+        #'Sec-Fetch-Mode': 'navigate',
+        #'Sec-Fetch-Site': 'none',
+        #'Sec-Fetch-User': '?1',
+        #'Upgrade-Insecure-Requests': '1',
+        'User-Agent': DEFAULT_USER_AGENT,
     }
     if renderer == 'playwright':
         result = fetch_html_with_playwright(
