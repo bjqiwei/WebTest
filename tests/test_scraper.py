@@ -1213,6 +1213,38 @@ def test_analyze_keeps_html_by_default(tmp_path):
     assert novideo_file.exists(), '默认不应删除无视频页面的 HTML'
 
 
+def test_analyze_ignores_non_english_language_urls(tmp_path):
+    import sqlite3
+
+    start_url = 'https://www.unfpa.org'
+    english_file = tmp_path / 'en.html'
+    spanish_file = tmp_path / 'es.html'
+    html = '<html><body><main><video src="/intro.mp4"></video></main></body></html>'
+    english_file.write_text(html, encoding='utf-8')
+    spanish_file.write_text(html, encoding='utf-8')
+    db_path = scraper_module._scrape_db_path(start_url, tmp_path)
+    conn = scraper_module._init_db(db_path)
+    conn.executemany(
+      "INSERT INTO pages (url, final_url, html_path, content_type, video_count, image_count) "
+      "VALUES (?, ?, ?, ?, -1, -1)",
+      [
+        ('https://www.unfpa.org/en/about', 'https://www.unfpa.org/en/about', str(english_file), 'text/html'),
+        ('https://www.unfpa.org/es/about', 'https://www.unfpa.org/es/about', str(spanish_file), 'text/html'),
+      ],
+    )
+    conn.commit()
+    conn.close()
+
+    result = scraper_module.analyze_saved_html(start_url, tmp_path)
+
+    assert result['page_count'] == 1
+    conn = sqlite3.connect(str(db_path))
+    rows = dict(conn.execute('SELECT url, video_count FROM pages'))
+    conn.close()
+    assert rows['https://www.unfpa.org/en/about'] == 1
+    assert rows['https://www.unfpa.org/es/about'] == -1
+
+
 def test_analyze_skips_duplicate_final_url(tmp_path):
     import sqlite3
 

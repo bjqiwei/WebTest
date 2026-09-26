@@ -163,6 +163,12 @@ DEFAULT_USER_AGENT = (
     'Chrome/154.0.0.0 Safari/537.36'
 )
 
+NON_ENGLISH_LANGUAGE_CODES = frozenset({
+    'es', 'fr', 'ar', 'ru', 'uk', 'tr', 'pt', 'vi', 'ro', 'hy', 'tk', 'ka',
+    'ja', 'th', 'lo', 'bs', 'sq', 'mk', 'sr', 'mn', 'ko', 'ku', 'kk', 'de',
+    'fa', 'ky',
+})
+
 # 每个线程抓取指定页数后重启本地 Playwright 浏览器，释放累积资源。
 BROWSER_RESTART_EVERY_N_PAGES = 100
 
@@ -411,6 +417,11 @@ def _normalize_url(url: str) -> str:
     # 以及 panthera.org 与 panthera.org/ 都视为同一 URL（根路径规范为无斜杠形式）
     path = path.rstrip('/')
     return parsed._replace(path=path, fragment='').geturl()
+
+
+def _is_non_english_language_url(url: str) -> bool:
+    parts = [part.lower() for part in urlparse(url).path.split('/') if part]
+    return bool(parts and parts[0] in NON_ENGLISH_LANGUAGE_CODES)
 
 
 def _rmquery_url(url: str) -> str:
@@ -1782,6 +1793,8 @@ def _load_unanalyzed_pages_from_db(start_url: str, outdir: Path) -> list:
         )
         pages = []
         for url, final_url, html_path, content_type in cursor:
+            #if _is_non_english_language_url(url):
+            #    continue
             if html_path:
                 p = Path(html_path)
                 if not p.is_absolute():
