@@ -56,7 +56,7 @@ CHALLENGE_MARKERS = (
     'Just a moment',
     'Just a moment...',
     'Attention required!',
-    #'Checking your browser',
+    'Checking your browser',
     'Enable JavaScript and Cookies',
     'The request could not be satisfied',
     'Request blocked',
@@ -75,7 +75,6 @@ CHALLENGE_MARKERS = (
     'Attention Required! | Cloudflare',
     'You need to enable JavaScript to run this app.',
     '400 Request Header Or Cookie Too Large',
-    '400 Bad Request',
     'Access denied | nursing.jhu.edu used Cloudflare to restrict access | nursing.jhu.edu | Cloudflare',
     'Project MUSE -- Verification required!',
     'Error 536: Invalid request',
@@ -85,6 +84,9 @@ CHALLENGE_MARKERS = (
     'Error 536: Invalid request',
     'Service Unavailable',
     'Deep Blue Documents',
+    '请稍候…',
+    'Client Challenge',
+    'IFAD | Checking your browser',
 )
 
 CONTENT_CUTOFF_MARKERS = (
