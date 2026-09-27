@@ -233,6 +233,21 @@ def test_extract_links_normalizes_trailing_slash():
     assert links == ['https://panthera.org/cat/small-cats'] * 3
 
 
+def test_extract_links_skips_malformed_url_and_keeps_valid_links():
+    html = '''
+    <html><body>
+      <a href="https://[bad">Malformed</a>
+      <a href="/valid">Valid</a>
+    </body></html>
+    '''
+    links = scraper_module._extract_links(
+        html,
+        'https://support.khanacademy.org/article',
+        'support.khanacademy.org',
+    )
+    assert links == ['https://support.khanacademy.org/valid']
+
+
 def test_extract_content_blocks_with_image_and_video():
     html = '''
     <html>

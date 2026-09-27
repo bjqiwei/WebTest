@@ -925,13 +925,21 @@ def _extract_links(soup: BeautifulSoup, base_url: str, root_host: str):
             continue
         if href.startswith(('mailto:', 'tel:', 'javascript:')):
             continue
-        #有扩展名，扩展名不是.html或.htm的链接
-        if not re.search(r'\.html?$', urlparse(href).path, re.IGNORECASE) and '.' in Path(urlparse(href).path).suffix:
+        try:
+            # 有扩展名，扩展名不是 .html 或 .htm 的链接
+            if not re.search(r'\.html?$', urlparse(href).path, re.IGNORECASE) and '.' in Path(urlparse(href).path).suffix:
+                continue
+            resolved = _normalize_url(_resolve_url(base_url, href))
+        except ValueError:
+            # 页面中的 malformed URL（例如未闭合的 IPv6 authority）不应中断整页解析。
             continue
-        resolved = _normalize_url(_resolve_url(base_url, href))
         if not resolved:
             continue
-        if not _is_same_domain(resolved, root_host):
+        try:
+            same_domain = _is_same_domain(resolved, root_host)
+        except ValueError:
+            continue
+        if not same_domain:
             continue
         links.append(resolved.lower())
     return links
