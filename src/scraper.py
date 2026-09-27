@@ -1793,8 +1793,6 @@ def _load_unanalyzed_pages_from_db(start_url: str, outdir: Path) -> list:
         )
         pages = []
         for url, final_url, html_path, content_type in cursor:
-            #if _is_non_english_language_url(url):
-            #    continue
             if html_path:
                 p = Path(html_path)
                 if not p.is_absolute():
@@ -1816,22 +1814,7 @@ def analyze_saved_html(start_url: str, outdir: Path, progress_callback=None, pha
     """
     set_log_file(outdir / 'analyze.log')
     pages = _load_unanalyzed_pages_from_db(start_url, outdir)
-    start_host = urlparse(start_url).netloc
-    deduped_pages = []
-    analyzed_final_urls = set()
-    for page in pages:
-        final_url = page.get('final_url') or page['url']
-        if not _is_same_domain(final_url, start_host):
-            _log(f'跳过外域 final_url 页面: {page["url"]} -> {final_url}')
-            continue
-        final_key = _remove_scheme(final_url, True)
-        if final_key in analyzed_final_urls:
-            _log(f'跳过 final_url 已分析页面: {page["url"]} -> {final_url}')
-            continue
-        analyzed_final_urls.add(final_key)
-        deduped_pages.append(page)
-    pages = deduped_pages
-    _log(f'Loaded {len(pages)} unanalyzed pages from SQLite.')
+    _log(f'Loaded {len(pages)} candidate pages from SQLite.')
     return _analyze_pages_from_cache(
         pages, outdir,
         progress_callback=progress_callback,
@@ -1922,14 +1905,32 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
         # 使用滑动窗口方式提交，只保留有限数量的 future，避免全部 HTML 同时驻留内存
         pending_futures = {}
         page_iter = iter(enumerate(raw_pages, start=1))
+        start_host = urlparse(start_url).netloc if start_url else ''
+        analyzed_final_urls = set()
 
         def _submit_next():
             """从迭代器取下一个页面提交，返回是否成功提交。"""
             try:
-                idx, page = next(page_iter)
-                future = executor.submit(_analyze_one, page)
-                pending_futures[future] = (idx, page['url'])
-                return True
+                while True:
+                    idx, page = next(page_iter)
+                    page_url = page['url']
+                    #if _is_non_english_language_url(page_url):
+                    #    _log(f'分析过程中跳过非英文 URL: {page_url}')
+                    #    continue
+
+                    final_url = page.get('final_url') or page_url
+                    if not _is_same_domain(final_url, start_host):
+                        _log(f'分析过程中跳过外域 final_url 页面: {page_url} -> {final_url}')
+                        continue
+
+                    final_key = _remove_scheme(final_url, False)
+                    if final_key in analyzed_final_urls:
+                        _log(f'分析过程中跳过 final_url 已分析页面: {page_url} -> {final_url}')
+                        continue
+
+                    future = executor.submit(_analyze_one, page)
+                    pending_futures[future] = (idx, page_url, final_key)
+                    return True
             except StopIteration:
                 return False
 
@@ -1943,7 +1944,7 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
             done, _ = wait(pending_futures.keys(), return_when=FIRST_COMPLETED)
 
             for future in done:
-                idx, current_url = pending_futures.pop(future)
+                idx, current_url, final_key = pending_futures.pop(future)
                 result = future.result()
                 # 立即释放 future 引用（通过 pop 后 future 变量即将被覆盖）
                 del future
@@ -1971,8 +1972,9 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
                             pass
 
                 # 只有包含视频的页面才保存 HTML + JSON
-                if video_count > 0:
+                if video_count > 0 and final_key not in analyzed_final_urls:
                     try:
+                        analyzed_final_urls.add(final_key)
                         timestamp = _extract_timestamp_from_stem(result['html_path'])
                         _save_analyze_output(
                             current_url, result['html_path'], analyze_dir, len(result_pages) + 1, timestamp,
