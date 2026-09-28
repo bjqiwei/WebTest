@@ -921,6 +921,10 @@ def _extract_links(soup: BeautifulSoup, base_url: str, root_host: str):
     links = []
     for a in soup.find_all('a', href=True):
         href = a.get('href', '').strip()
+        if '<' in href:
+            href = href.split('<', 1)[0].strip()
+        if '>' in href:
+            continue
         if not href or href.startswith('#'):
             continue
         if href.startswith(('mailto:', 'tel:', 'javascript:')):

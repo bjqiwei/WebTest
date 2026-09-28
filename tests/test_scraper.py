@@ -248,6 +248,26 @@ def test_extract_links_skips_malformed_url_and_keeps_valid_links():
     assert links == ['https://support.khanacademy.org/valid']
 
 
+def test_extract_links_removes_html_tail_from_malformed_href():
+    html = '''
+    <html><body>
+      <a href="https://www.anthropology.utoronto.ca/people/directories/</body></html>">
+        Directory
+      </a>
+      <a href="/valid">Valid</a>
+    </body></html>
+    '''
+    links = scraper_module._extract_links(
+        html,
+        'https://www.anthropology.utoronto.ca/',
+        'www.anthropology.utoronto.ca',
+    )
+    assert links == [
+      'https://www.anthropology.utoronto.ca/people/directories',
+        'https://www.anthropology.utoronto.ca/valid',
+    ]
+
+
 def test_extract_content_blocks_with_image_and_video():
     html = '''
     <html>
