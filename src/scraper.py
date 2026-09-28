@@ -1068,7 +1068,12 @@ def fetch_html_with_playwright(
                     parsed_url.scheme in ('http', 'https')
                     and not _is_same_domain(request_url, start_host)
                 )
-                should_block = resource_type == 'Image' or is_cross_domain
+                # Never block Document requests: a page may legitimately redirect
+                # to another host, and blocking that navigation makes page.goto()
+                # fail with ERR_BLOCKED_BY_CLIENT.
+                should_block = resource_type == 'Image' or (
+                    is_cross_domain and resource_type != 'Document'
+                )
                 try:
                     if should_block:
                         cdp_session.send('Fetch.failRequest', {
