@@ -1143,9 +1143,17 @@ def fetch_html_with_playwright(
         _cleanup_thread_browser(close_browser=not use_cdp)
 
     # CDP：复用 thread-local browser + context，只开/关 tab
-    browser = _get_thread_browser(cdp_url, headless)
-    context = _get_thread_context(cdp_url, headless)
-    page = context.new_page()
+    page = None
+    try:
+        browser = _get_thread_browser(cdp_url, headless)
+        context = _get_thread_context(cdp_url, headless)
+        page = context.new_page()
+    except Exception as e:
+        if 'context or browser has been closed' in str(e) or 'connect ECONNREFUSED' in str(e) or 'Request context disposed' in str(e):
+            _cleanup_thread_context(close_context=not use_cdp)
+            _cleanup_thread_browser(close_browser=not use_cdp)
+            time.sleep(max(10.0, body_deadline - time.time()))
+        raise
     # Explicit handling avoids Playwright's implicit dismiss racing with CDP/page close.
     page.on('dialog', _dismiss_playwright_dialog)
     html = ''
