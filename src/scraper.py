@@ -1814,16 +1814,16 @@ def _load_unanalyzed_pages_from_db(start_url: str, outdir: Path) -> list:
         conn = sqlite3.connect(str(db_path), timeout=30)
         conn.execute("PRAGMA journal_mode=WAL")
         cursor = conn.execute(
-            "SELECT url, final_url, html_path, content_type FROM pages WHERE video_count = -1 OR video_count > 0"
+            "SELECT url, final_url, html_path, content_type, video_count FROM pages WHERE video_count > 0 OR video_count = -1"
         )
         pages = []
-        for url, final_url, html_path, content_type in cursor:
+        for url, final_url, html_path, content_type, video_count in cursor:
             if html_path:
                 p = Path(html_path)
                 if not p.is_absolute():
                     p = outdir / p
                 html_path = str(p)
-            pages.append({'url': url, 'final_url': final_url, 'html_path': html_path, 'content_type': content_type})
+            pages.append({'url': url, 'final_url': final_url, 'html_path': html_path, 'content_type': content_type, 'video_count': video_count})
         conn.close()
         return pages
     except Exception as e:
@@ -1931,6 +1931,11 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
         pending_futures = {}
         page_iter = iter(enumerate(raw_pages, start=1))
         start_host = urlparse(start_url).netloc if start_url else ''
+        hasvideo_final_urls = {
+            _remove_scheme(page['final_url'] or page['url'], False)
+            for page in raw_pages
+            if page.get('video_count', -1) > 0
+        }
         analyzed_final_urls = set()
 
         def _submit_next():
@@ -1939,6 +1944,7 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
                 while True:
                     idx, page = next(page_iter)
                     page_url = page['url']
+                    video_count = page.get('video_count', -1)
                     #if _is_non_english_language_url(page_url):
                     #    _log(f'分析过程中跳过非英文 URL: {page_url}')
                     #    continue
@@ -1949,10 +1955,12 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
                         continue
 
                     final_key = _remove_scheme(final_url, False)
-                    if final_key in analyzed_final_urls:
+                    if video_count > 0:
+                        #_log(f'分析过程中发现含视频页面: {page_url} -> {final_url}')
+                        pass
+                    elif final_key in analyzed_final_urls or final_key in hasvideo_final_urls:
                         _log(f'分析过程中跳过 final_url 已分析页面: {page_url} -> {final_url}')
                         continue
-
                     future = executor.submit(_analyze_one, page)
                     pending_futures[future] = (idx, page_url, final_key)
                     return True
@@ -2005,8 +2013,14 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
                             current_url, result['html_path'], analyze_dir, len(result_pages) + 1, timestamp,
                             content_blocks=result['content_blocks'],
                         )
+                        if db_conn is not None:
+                            db_conn.execute("UPDATE pages SET video_count = ?, image_count = ? WHERE url = ?",
+                                (video_count, image_count, current_url),
+                            )
+                            db_conn.commit()
                     except Exception:
                         analysis_failed_reasons[current_url] = 'save_output_error'
+                        video_count = -1
                     else:
                         entry = {
                             'url': current_url,
@@ -2018,7 +2032,7 @@ def _analyze_pages_from_cache(raw_pages, outdir, progress_callback=None, phase_c
                         result_pages.append(entry)
 
                 # 更新 DB 中的统计值
-                if db_conn is not None:
+                if video_count <= 0 and db_conn is not None:
                     try:
                         db_conn.execute(
                             "UPDATE pages SET video_count = ?, image_count = ? WHERE url = ?",
