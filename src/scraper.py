@@ -1098,14 +1098,16 @@ def fetch_html_with_playwright(
             cdp_session.send('Fetch.enable', {
                 'patterns': [{'urlPattern': '*', 'requestStage': 'Request'}]
             })
-
+            response_status = {'value': None}
+            page.on('response',lambda response: response_status.update(value=response.status))
             response = page.goto(url, wait_until='domcontentloaded', timeout=max(10.0, body_deadline - time.time()) * 1000)
             final_url = response.url if response is not None else page.url
             ctype = response.headers.get('content-type', '') if response is not None else ''
-        except Exception as goto_err:
-            err_msg = str(goto_err)
-            if 'net::ERR_HTTP_RESPONSE_CODE_FAILURE' in err_msg or 'net::ERR_ABORTED' in err_msg:
-                _log(f'HTTP 响应/中止错误，使用 page.request.get 重新获取: {url}, 错误: {goto_err}')
+        except Exception as err:
+            err_msg = str(err)
+            status_code = response_status.get('value') if 'response_status' in locals() else None
+            if 'net::ERR_ABORTED' in err_msg:
+                _log(f'HTTP 响应失败:{status_code}，使用 page.request.get 重新获取: {url}, 错误: {err}')
                 api_resp = page.request.get(url)
                 ctype = api_resp.headers.get('content-type', '')
                 final_url = getattr(api_resp, 'url', url)
@@ -1114,15 +1116,15 @@ def fetch_html_with_playwright(
                 body_bytes = api_resp.body()
                 html_text = body_bytes.decode('utf-8', errors='replace')
                 return html_text, ctype, final_url
+            elif 'net::ERR_HTTP_RESPONSE_CODE_FAILURE' in err_msg:
+                _log(f'HTTP 响应失败: {status_code}, 错误: {err}')
+                if status_code == 400:
+                    return '', 'HTTP 400 Bad Request', url
             raise
 
-        try:
-            #_log(f'等待 DOM 加载完成: {url} 超时时间: {max(10.0, body_deadline - time.time()):.1f}秒')
-            page.wait_for_load_state('load', timeout=max(10.0, body_deadline - time.time()) * 1000)
-        except TimeoutError:
-            _log(f'等待 DOM 加载超时: {url}')
-            return '', ctype, page.url
-
+        #_log(f'等待 DOM 加载完成: {url} 超时时间: {max(10.0, body_deadline - time.time()):.1f}秒')
+        page.wait_for_load_state('load', timeout=max(10.0, body_deadline - time.time()) * 1000)
+            
         if HTML_CONTENT_TYPE_RE.search(ctype) and _is_challenge_or_block_page(page.content()):
             soup = BeautifulSoup(page.content(),'html.parser')
             marker = _find_challenge_marker(soup)
@@ -1172,7 +1174,7 @@ def fetch_html_with_playwright(
         html, content_type, final_url = _navigate_and_capture(page, url, body_deadline, wait_seconds)
         _log(f'HTML已抓取，准备关闭page: {url}, 字节数: {len(html)}')
     except Exception as e:
-        _log(f'抓取页面异常: {url}, 错误: {e}')
+        #_log(f'抓取页面异常: {url}, 错误: {e}')
         raise
     finally:
         page.close()
